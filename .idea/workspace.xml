@@ -4,18 +4,19 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="d1c36a19-5f59-4ffd-a95e-1bbecfb737b5" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/.idea/PowerPlan.iml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/inspectionProfiles/profiles_settings.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/modules.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/vcs.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/app/streamlit_app.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/requirements.txt" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/sample.ipynb" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/simulation/economicBalancing.ipynb" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/simulation/energyBalancing.ipynb" afterDir="false" />
+    <list default="true" id="d1c36a19-5f59-4ffd-a95e-1bbecfb737b5" name="Changes" comment="removed sample jupyter notebook, added API call function for met office, converted to pyproject.toml config file">
+      <change afterPath="$PROJECT_DIR$/src/data/create_energy_tariff_database.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/data/create_energy_tariff_database_simple.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/build/lib/api/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/api/energyScraping/ScrapeTariff.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/build/lib/api/energy_market.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/api/energyScraping/Tariff.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/build/lib/api/get_weather.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/models/loadInference.ipynb" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/models/pvModel.ipynb" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/pyproject.toml" beforeDir="false" afterPath="$PROJECT_DIR$/pyproject.toml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/requirements.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/api/energy_market.py" beforeDir="false" afterPath="$PROJECT_DIR$/src/api/energyScraping/testScrape.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -25,17 +26,29 @@
   <component name="FileTemplateManagerImpl">
     <option name="RECENT_TEMPLATES">
       <list>
-        <option value="Python Script" />
         <option value="Jupyter Notebook" />
+        <option value="Python Script" />
       </list>
     </option>
   </component>
   <component name="Git.Settings">
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
   </component>
-  <component name="ProjectColorInfo"><![CDATA[{
-  "associatedIndex": 5
-}]]></component>
+  <component name="GitHubPullRequestSearchHistory">{
+  &quot;lastFilter&quot;: {
+    &quot;state&quot;: &quot;OPEN&quot;,
+    &quot;assignee&quot;: &quot;TomOsborne123&quot;
+  }
+}</component>
+  <component name="GithubPullRequestsUISettings">{
+  &quot;selectedUrlAndAccountId&quot;: {
+    &quot;url&quot;: &quot;https://github.com/TomOsborne123/PowerPlan.git&quot;,
+    &quot;accountId&quot;: &quot;7a684e9c-a608-4e70-be0d-de5774d3b95d&quot;
+  }
+}</component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 5
+}</component>
   <component name="ProjectId" id="38D5flmnUPj9qBxfJOFJBZ7NpMs" />
   <component name="ProjectViewState">
     <option name="hideEmptyMiddlePackages" value="true" />
@@ -44,11 +57,86 @@
   <component name="PropertiesComponent"><![CDATA[{
   "keyToString": {
     "ModuleVcsDetector.initialDetectionPerformed": "true",
+    "Python.Python Console.executor": "Run",
+    "Python.ScrapeTariff.executor": "Run",
+    "Python.create_energy_tariff_database_simple.executor": "Run",
+    "Python.deleter.executor": "Run",
+    "Python.energy_market.executor": "Run",
+    "Python.fetch_weather.executor": "Run",
+    "Python.get_weather.executor": "Run",
+    "Python.met_office.executor": "Run",
+    "Python.scrapeTariff.executor": "Run",
+    "Python.tariffDatabase.executor": "Run",
+    "Python.testScrape.executor": "Run",
     "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
     "RunOnceActivity.git.unshallow": "true",
-    "git-widget-placeholder": "main"
+    "git-widget-placeholder": "main",
+    "last_opened_file_path": "/Users/tomosborne/PycharmProjects/PowerPlan/src",
+    "settings.editor.selected.configurable": "tasks.servers"
   }
 }]]></component>
+  <component name="RecentsManager">
+    <key name="CopyFile.RECENT_KEYS">
+      <recent name="$PROJECT_DIR$/src" />
+    </key>
+    <key name="MoveFile.RECENT_KEYS">
+      <recent name="$PROJECT_DIR$/src/data" />
+      <recent name="$PROJECT_DIR$/src/models" />
+    </key>
+  </component>
+  <component name="RunManager">
+    <configuration name="Python Console" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
+      <module name="PowerPlan" />
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <envs>
+        <env name="PYTHONUNBUFFERED" value="1" />
+      </envs>
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="" />
+      <option name="IS_MODULE_SDK" value="false" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <option name="SCRIPT_NAME" value="/Python Console.py" />
+      <option name="PARAMETERS" value="" />
+      <option name="SHOW_COMMAND_LINE" value="false" />
+      <option name="EMULATE_TERMINAL" value="false" />
+      <option name="MODULE_MODE" value="false" />
+      <option name="REDIRECT_INPUT" value="false" />
+      <option name="INPUT_FILE" value="" />
+      <method v="2" />
+    </configuration>
+    <configuration name="get_weather" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
+      <module name="PowerPlan" />
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <envs>
+        <env name="PYTHONUNBUFFERED" value="1" />
+      </envs>
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/src/api" />
+      <option name="IS_MODULE_SDK" value="true" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/src/api/get_weather.py" />
+      <option name="PARAMETERS" value="" />
+      <option name="SHOW_COMMAND_LINE" value="false" />
+      <option name="EMULATE_TERMINAL" value="false" />
+      <option name="MODULE_MODE" value="false" />
+      <option name="REDIRECT_INPUT" value="false" />
+      <option name="INPUT_FILE" value="" />
+      <method v="2" />
+    </configuration>
+    <recent_temporary>
+      <list>
+        <item itemvalue="Python.Python Console" />
+        <item itemvalue="Python.get_weather" />
+      </list>
+    </recent_temporary>
+  </component>
   <component name="SharedIndexes">
     <attachedChunks>
       <set>
@@ -64,7 +152,29 @@
       <option name="presentableId" value="Default" />
       <updated>1768321406822</updated>
     </task>
-    <servers />
+    <task id="LOCAL-00001" summary="removed sample jupyter notebook">
+      <option name="closed" value="true" />
+      <created>1768322007007</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1768322007007</updated>
+    </task>
+    <task id="LOCAL-00002" summary="removed sample jupyter notebook, added API call function for met office, converted to pyproject.toml config file">
+      <option name="closed" value="true" />
+      <created>1768838383370</created>
+      <option name="number" value="00002" />
+      <option name="presentableId" value="LOCAL-00002" />
+      <option name="project" value="LOCAL" />
+      <updated>1768838383370</updated>
+    </task>
+    <option name="localTasksCounter" value="3" />
+    <servers>
+      <JIRA url="https://tomosbornee123.atlassian.net/jira/software/projects/PP/list?jql=project%20%3D%20PP%20ORDER%20BY%20created%20DESC">
+        <option name="searchQuery" value="&quot;issue type&quot; = story" />
+        <username>tomosbornee123@gmail.com</username>
+      </JIRA>
+    </servers>
   </component>
   <component name="Vcs.Log.Tabs.Properties">
     <option name="OPEN_GENERIC_TABS">
@@ -101,5 +211,10 @@
         </entry>
       </map>
     </option>
+  </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="removed sample jupyter notebook" />
+    <MESSAGE value="removed sample jupyter notebook, added API call function for met office, converted to pyproject.toml config file" />
+    <option name="LAST_COMMIT_MESSAGE" value="removed sample jupyter notebook, added API call function for met office, converted to pyproject.toml config file" />
   </component>
 </project>

@@ -14,7 +14,9 @@ dependencies = [
     "requests_cache>=0.9",
     "retry-requests>=0.2",
     "openmeteo-requests>=0.1",
-    # add all other requirements from requirements.txt
+    "mysql-connector-python>=9.5.0",
+    "bs4>=0.0.2",
+    "urllib3>=2.6.3"
 ]
 
 [build-system]

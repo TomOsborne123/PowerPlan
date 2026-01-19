@@ -1,0 +1,3 @@
+.cache.dqlite
+.cache/
+*.egg-info/
