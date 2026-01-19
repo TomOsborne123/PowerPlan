@@ -1,0 +1,22 @@
+[project]
+name = "PowerPlan"
+version = "0.1.0"
+description = "PowerPlan : A Home Energy System Planning Tool"
+authors = [
+    { name="Tom Osborne", email="tomosbornee123@gmail.com" }
+]
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+
+dependencies = [
+    "pandas>=2.0",
+    "requests_cache>=0.9",
+    "retry-requests>=0.2",
+    "openmeteo-requests>=0.1",
+    # add all other requirements from requirements.txt
+]
+
+[build-system]
+requires = ["setuptools>=65", "wheel"]
+build-backend = "setuptools.build_meta"

@@ -1,0 +1,4 @@
+numpy
+pandas
+requests
+openmeteo-requests #Met Office API
