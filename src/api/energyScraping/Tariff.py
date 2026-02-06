@@ -15,7 +15,7 @@ class Tariff:
     new_supplier_name: str
     tariff_name: str
     tariff_type: str
-    payment_method: str
+    pay_method: str
     fixed_price_length_months: int
     is_green: bool
 
@@ -63,15 +63,21 @@ class Tariff:
         finally:
             conn.close()
 
-    def save(self, current_supplier: str, pay_method: str, EV_bool: bool):
-        """Save tariff to database using parameterized query"""
+    def save(self, current_supplier: str, pay_method: str, EV_question: str):
+        """Save tariff to database using parameterized query
+        
+        Args:
+            current_supplier: Current energy supplier name
+            pay_method: Payment method (e.g., 'monthly_direct_debit')
+            EV_question: EV question answer - 'Yes', 'No', or 'No but interested'
+        """
         with self._get_db_connection() as conn:
             cursor = conn.cursor()
 
             query = """
             INSERT INTO fact_tariff_search_simple (
-                current_supplier_name, pay_method, EV_bool, new_supplier_name, 
-                tariff_name, tariff_type, payment_method, fixed_price_length_months, 
+                current_supplier_name, pay_method, EV_question, new_supplier_name, 
+                tariff_name, tariff_type, pay_method, fixed_price_length_months, 
                 is_green, region_code, region_name, dno_name, dno_id, postcode, 
                 outward_code, latitude, longitude, fuel_type, search_date, month, 
                 year, annual_electricity_kwh, annual_gas_kwh, unit_rate, 
@@ -86,11 +92,11 @@ class Tariff:
             values = (
                 current_supplier,
                 pay_method,
-                EV_bool,
+                EV_question,
                 self.new_supplier_name,
                 self.tariff_name,
                 self.tariff_type,
-                self.payment_method,
+                self.pay_method,
                 self.fixed_price_length_months,
                 self.is_green,
                 self.region_code,
