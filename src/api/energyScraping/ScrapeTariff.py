@@ -12,6 +12,226 @@ from datetime import datetime
 import re
 from typing import List
 import re
+import requests
+from typing import Dict, Optional
+
+class PostcodeLookup:
+    """Lookup location data from UK postcodes"""
+    
+    # DNO (Distribution Network Operator) mapping by postcode area
+    DNO_MAPPING = {
+        # Scotland
+        'AB': ('SPEN', 'SPEN_1'),
+        'DD': ('SPEN', 'SPEN_1'),
+        'DG': ('SPEN', 'SPEN_1'),
+        'EH': ('SPEN', 'SPEN_1'),
+        'FK': ('SPEN', 'SPEN_1'),
+        'G': ('SPEN', 'SPEN_1'),
+        'HS': ('SSEN', 'SSEN_1'),
+        'IV': ('SSEN', 'SSEN_1'),
+        'KA': ('SPEN', 'SPEN_1'),
+        'KW': ('SSEN', 'SSEN_1'),
+        'KY': ('SPEN', 'SPEN_1'),
+        'ML': ('SPEN', 'SPEN_1'),
+        'PA': ('SPEN', 'SPEN_1'),
+        'PH': ('SSEN', 'SSEN_1'),
+        'ZE': ('SSEN', 'SSEN_1'),
+        
+        # Northern England
+        'BD': ('NPG', 'NPG_1'),
+        'CA': ('ENWL', 'ENWL_1'),
+        'DH': ('NPG', 'NPG_1'),
+        'DL': ('NPG', 'NPG_1'),
+        'DN': ('NPG', 'NPG_1'),
+        'HG': ('NPG', 'NPG_1'),
+        'HU': ('NPG', 'NPG_1'),
+        'HX': ('ENWL', 'ENWL_1'),
+        'LA': ('ENWL', 'ENWL_1'),
+        'LS': ('NPG', 'NPG_1'),
+        'NE': ('NPG', 'NPG_1'),
+        'SR': ('NPG', 'NPG_1'),
+        'TS': ('NPG', 'NPG_1'),
+        'YO': ('NPG', 'NPG_1'),
+        
+        # North West England
+        'BB': ('ENWL', 'ENWL_1'),
+        'BL': ('ENWL', 'ENWL_1'),
+        'CH': ('SPMW', 'SPMW_1'),
+        'CW': ('ENWL', 'ENWL_1'),
+        'FY': ('ENWL', 'ENWL_1'),
+        'L': ('ENWL', 'ENWL_1'),
+        'M': ('ENWL', 'ENWL_1'),
+        'OL': ('ENWL', 'ENWL_1'),
+        'PR': ('ENWL', 'ENWL_1'),
+        'SK': ('ENWL', 'ENWL_1'),
+        'WA': ('ENWL', 'ENWL_1'),
+        'WN': ('ENWL', 'ENWL_1'),
+        
+        # Midlands
+        'B': ('WPD_WM', 'WPD_4'),
+        'CV': ('WPD_WM', 'WPD_4'),
+        'DE': ('WPD_EM', 'WPD_3'),
+        'DY': ('WPD_WM', 'WPD_4'),
+        'LE': ('WPD_EM', 'WPD_3'),
+        'LN': ('WPD_EM', 'WPD_3'),
+        'NG': ('WPD_EM', 'WPD_3'),
+        'NN': ('WPD_EM', 'WPD_3'),
+        'S': ('NPG', 'NPG_1'),
+        'ST': ('WPD_WM', 'WPD_4'),
+        'SY': ('SPMW', 'SPMW_1'),
+        'TF': ('SPMW', 'SPMW_1'),
+        'WS': ('WPD_WM', 'WPD_4'),
+        'WV': ('WPD_WM', 'WPD_4'),
+        
+        # East England
+        'CB': ('UKPN_EPN', 'UKPN_2'),
+        'CM': ('UKPN_EPN', 'UKPN_2'),
+        'CO': ('UKPN_EPN', 'UKPN_2'),
+        'IP': ('UKPN_EPN', 'UKPN_2'),
+        'LU': ('UKPN_EPN', 'UKPN_2'),
+        'NR': ('UKPN_EPN', 'UKPN_2'),
+        'PE': ('UKPN_EPN', 'UKPN_2'),
+        'SG': ('UKPN_EPN', 'UKPN_2'),
+        
+        # London
+        'E': ('UKPN_LPN', 'UKPN_1'),
+        'EC': ('UKPN_LPN', 'UKPN_1'),
+        'EN': ('UKPN_LPN', 'UKPN_1'),
+        'IG': ('UKPN_LPN', 'UKPN_1'),
+        'N': ('UKPN_LPN', 'UKPN_1'),
+        'NW': ('UKPN_LPN', 'UKPN_1'),
+        'RM': ('UKPN_LPN', 'UKPN_1'),
+        'SE': ('UKPN_LPN', 'UKPN_1'),
+        'SW': ('UKPN_LPN', 'UKPN_1'),
+        'W': ('UKPN_LPN', 'UKPN_1'),
+        'WC': ('UKPN_LPN', 'UKPN_1'),
+        
+        # South East England
+        'BN': ('SSEN_SEPD', 'SSEN_2'),
+        'BR': ('UKPN_SPN', 'UKPN_3'),
+        'CR': ('UKPN_SPN', 'UKPN_3'),
+        'CT': ('UKPN_SPN', 'UKPN_3'),
+        'DA': ('UKPN_SPN', 'UKPN_3'),
+        'GU': ('SSEN_SEPD', 'SSEN_2'),
+        'HA': ('UKPN_LPN', 'UKPN_1'),
+        'HP': ('SSEN_SEPD', 'SSEN_2'),
+        'KT': ('UKPN_SPN', 'UKPN_3'),
+        'ME': ('UKPN_SPN', 'UKPN_3'),
+        'MK': ('SSEN_SEPD', 'SSEN_2'),
+        'OX': ('SSEN_SEPD', 'SSEN_2'),
+        'PO': ('SSEN_SEPD', 'SSEN_2'),
+        'RG': ('SSEN_SEPD', 'SSEN_2'),
+        'RH': ('SSEN_SEPD', 'SSEN_2'),
+        'SL': ('SSEN_SEPD', 'SSEN_2'),
+        'SM': ('UKPN_SPN', 'UKPN_3'),
+        'SO': ('SSEN_SEPD', 'SSEN_2'),
+        'TN': ('UKPN_SPN', 'UKPN_3'),
+        'TW': ('UKPN_LPN', 'UKPN_1'),
+        'UB': ('UKPN_LPN', 'UKPN_1'),
+        
+        # South West England
+        'BA': ('WPD_SW', 'WPD_1'),
+        'BH': ('SSEN_SEPD', 'SSEN_2'),
+        'BS': ('WPD_SW', 'WPD_1'),
+        'DT': ('WPD_SW', 'WPD_1'),
+        'EX': ('WPD_SW', 'WPD_1'),
+        'GL': ('WPD_SW', 'WPD_1'),
+        'PL': ('WPD_SW', 'WPD_1'),
+        'SN': ('SSEN_SEPD', 'SSEN_2'),
+        'SP': ('SSEN_SEPD', 'SSEN_2'),
+        'TA': ('WPD_SW', 'WPD_1'),
+        'TQ': ('WPD_SW', 'WPD_1'),
+        'TR': ('WPD_SW', 'WPD_1'),
+        
+        # Wales
+        'CF': ('WPD_SW', 'WPD_2'),
+        'LD': ('WPD_SW', 'WPD_2'),
+        'LL': ('SPMW', 'SPMW_1'),
+        'NP': ('WPD_SW', 'WPD_2'),
+        'SA': ('WPD_SW', 'WPD_2'),
+    }
+    
+    @staticmethod
+    def _get_dno_from_outward_code(outward_code: str):
+        """
+        Try 2-letter outward code first, then fall back to 1-letter.
+        """
+        if not outward_code:
+            return ('Unknown', 'Unknown')
+
+        outward_code = outward_code.upper()
+
+        # Try first two letters (e.g. "SW", "EC")
+        if len(outward_code) >= 2:
+            key_2 = outward_code[:2]
+            if key_2 in PostcodeLookup.DNO_MAPPING:
+                return PostcodeLookup.DNO_MAPPING[key_2]
+
+        # Fall back to first letter (e.g. "S", "L")
+        key_1 = outward_code[0]
+        return PostcodeLookup.DNO_MAPPING.get(key_1, ('Unknown', 'Unknown'))
+
+    @staticmethod
+    def lookup(postcode: str) -> Optional[Dict]:
+        """
+        Lookup postcode data from postcodes.io API
+        
+        Returns dict with:
+        - postcode
+        - outward_code
+        - latitude
+        - longitude
+        - region
+        - admin_district
+        - country
+        - dno_name
+        - dno_id
+        """
+        if not postcode:
+            return None
+        
+        # Clean postcode
+        postcode_clean = postcode.strip().upper().replace(" ", "")
+        
+        try:
+            # Call postcodes.io API
+            response = requests.get(
+                f"https://api.postcodes.io/postcodes/{postcode_clean}",
+                timeout=5
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                if data['status'] == 200:
+                    result = data['result']
+                    
+                    # Extract outward code (first part of postcode)
+                    outward_code = result.get('outcode', '')
+                    
+                    # Get DNO based on outward code
+                    dno_name, dno_id = PostcodeLookup._get_dno_from_outward_code(outward_code)
+
+                    
+                    return {
+                        'postcode': result.get('postcode', postcode),
+                        'outward_code': outward_code,
+                        'latitude': result.get('latitude', 0.0),
+                        'longitude': result.get('longitude', 0.0),
+                        'region': result.get('region', ''),
+                        'region_code': result.get('codes', {}).get('admin_district', ''),
+                        'admin_district': result.get('admin_district', ''),
+                        'country': result.get('country', ''),
+                        'dno_name': dno_name,
+                        'dno_id': dno_id,
+                    }
+            
+            print(f"⚠ Postcode lookup failed: {response.status_code}")
+            return None
+            
+        except requests.exceptions.RequestException as e:
+            print(f"⚠ Error looking up postcode: {e}")
+            return None
 
 class ScrapeTariff:
 
@@ -20,6 +240,7 @@ class ScrapeTariff:
         self.tariff = None
         self.browser = None
         self.page = None
+        self.location_data = None
 
     def scrape(self,
                postcode: str,
@@ -27,12 +248,31 @@ class ScrapeTariff:
                fuel_type: str = 'both',
                current_supplier: str = '',
                pay_method: str = 'monthly_direct_debit',
-               has_ev: str = 'No',
-               email: str = '') -> List[Tariff]:
+               has_ev: str = 'No') -> List[Tariff]:
 
         url = "https://www.moneysupermarket.com/gas-and-electricity/"
 
         print(f"-- Starting scrape for {postcode} --")
+
+        self.location_data = PostcodeLookup.lookup(postcode)
+        if self.location_data:
+            print(f"✓ Location: {self.location_data.get('admin_district')}, {self.location_data.get('region')}")
+            print(f"✓ DNO: {self.location_data.get('dno_name')} ({self.location_data.get('dno_id')})")
+            print(f"✓ Coordinates: {self.location_data.get('latitude')}, {self.location_data.get('longitude')}")
+        else:
+            print("⚠ Could not lookup postcode data - will use defaults")
+            self.location_data = {
+                'postcode': postcode,
+                'outward_code': postcode.split()[0] if ' ' in postcode else '',
+                'latitude': 0.0,
+                'longitude': 0.0,
+                'region': '',
+                'region_code': '',
+                'admin_district': '',
+                'country': '',
+                'dno_name': 'Unknown',
+                'dno_id': 'Unknown',
+            }
 
         try:
             # Use Camoufox with humanized settings
@@ -56,18 +296,6 @@ class ScrapeTariff:
                 time.sleep(5)
 
                 print(f"Page title: {self.page.title()}")
-
-                # DEBUG: Save what we're seeing
-                with open("debug_page.html", "w", encoding="utf-8") as f:
-                    f.write(self.page.content())
-                print("Saved page content to debug_page.html")
-
-                # Take screenshot
-                self.page.screenshot(path="debug_screenshot.png")
-                print("Saved screenshot to debug_screenshot.png")
-
-                print(f"Page title: {self.page.title()}")
-                print(f"URL: {self.page.url}")
 
                 # Check JavaScript is working
                 try:
@@ -828,34 +1056,53 @@ class ScrapeTariff:
             raise Exception("Could not find any tariff result cards in results_page.html")
 
         def build_tariff_from_card(card) -> Tariff:
-            # Helper: get text within this card
-            def get_card_text(selector: str, default: str = "") -> str:
-                        # Extract annual usage from the page-level usage section
-                annual_electricity_kwh = 0
-                annual_gas_kwh = 0
-                
-                usage_overview = self.soup.select_one(".current-usage-overview")
-                if usage_overview:
-                    fuel_sections = usage_overview.select(".current-usage-overview__fuel")
-                    for fuel_section in fuel_sections:
-                        fuel_type_el = fuel_section.select_one(".current-usage-overview__consumption__type")
-                        consumption_el = fuel_section.select_one(".current-usage-overview__consumption")
+            cost_span = self.soup.find(
+                "span",
+                class_="current-usage-card__callout__value",
+                string=re.compile("/yr")
+            )
+
+            text = cost_span.get_text(strip=True)
+
+            # Extract annual price
+            annual_cost_ = re.search(r"£([\d,]+)/yr", text).group(1)
+            annual_cost_ = int(annual_cost_.replace(",", ""))
+
+            annual_electricity_kwh = None
+            annual_gas_kwh = None
+            
+            usage_overview = self.soup.select_one(".current-usage-overview")
+
+            if usage_overview:
+                fuel_sections = usage_overview.select(".current-usage-overview__fuel")
+                for fuel_section in fuel_sections:
+                    # Find the fuel type and consumption spans that are siblings
+                    fuel_type_span = fuel_section.select_one(".current-usage-overview__consumption__type")
+                    
+                    if fuel_type_span:
+                        fuel_type_text = fuel_type_span.get_text(strip=True).lower()
                         
-                        if fuel_type_el and consumption_el:
-                            fuel_type_text = fuel_type_el.get_text(strip=True).lower()
-                            consumption_text = consumption_el.get_text(strip=True)
+                        # The consumption value is the next sibling span
+                        consumption_span = fuel_type_span.find_next_sibling("span")
+                        
+                        if consumption_span:
+                            consumption_text = consumption_span.get_text(strip=True)
+                            print(f"  Found {fuel_type_text}: {consumption_text}")
                             
                             # Extract number from "7974 kWh / year" format
                             match = re.search(r"([\d,]+)\s*kwh", consumption_text, re.IGNORECASE)
                             if match:
                                 try:
                                     value = int(match.group(1).replace(",", ""))
+                                    
                                     if "gas" in fuel_type_text:
                                         annual_gas_kwh = value
                                     elif "electric" in fuel_type_text:
                                         annual_electricity_kwh = value
                                 except ValueError:
                                     pass
+            # Helper: get text within this card
+            def get_card_text(selector: str, default: str = "") -> str:
                 el = card.select_one(selector)
                 return el.get_text(strip=True) if el else default
 
@@ -893,15 +1140,6 @@ class ScrapeTariff:
                         fixed_price_length_months = int(m.group(1))
                     except ValueError:
                         fixed_price_length_months = 0
-
-            # --- Payment method (from strapline if available) ---
-            pay_method = "Unknown"
-            strapline_el = card.find_next("div", class_="results-new-item-strapline")
-            strapline_text = (
-                strapline_el.get_text(" ", strip=True).lower() if strapline_el else ""
-            )
-            if "direct debit" in strapline_text:
-                pay_method = "Direct Debit"
 
             # --- Exit fee & yearly saving / annual cost ---
             exit_fee = 0.0
@@ -1011,19 +1249,18 @@ class ScrapeTariff:
                 new_supplier_name=new_supplier_name,
                 tariff_name=tariff_name,
                 tariff_type=tariff_type,
-                pay_method=pay_method,
                 fixed_price_length_months=fixed_price_length_months,
                 is_green=is_green,
 
-                # Location details (not available in markup yet – defaulted)
-                region_code=self._get_text(".region-code", ""),
-                region_name=self._get_text(".region-name", ""),
-                dno_name=self._get_text(".dno-name", ""),
-                dno_id=self._get_text(".dno-id", ""),
-                postcode=self._get_text(".postcode", ""),
-                outward_code=self._get_text(".outward-code", ""),
-                latitude=self._get_float(".latitude", 0.0),
-                longitude=self._get_float(".longitude", 0.0),
+                # Location details - USE LOOKUP DATA
+                region_code=self.location_data.get('region_code', ''),
+                region_name=self.location_data.get('region', ''),
+                dno_name=self.location_data.get('dno_name', ''),
+                dno_id=self.location_data.get('dno_id', ''),
+                postcode=self.location_data.get('postcode', ''),
+                outward_code=self.location_data.get('outward_code', ''),
+                latitude=self.location_data.get('latitude', 0.0),
+                longitude=self.location_data.get('longitude', 0.0),
 
                 fuel_type=fuel_type,
 
@@ -1033,12 +1270,12 @@ class ScrapeTariff:
                 year=now.year,
 
                 # Cost details
-                annual_electricity_kwh=self._get_int(".electricity-kwh", 0),
-                annual_gas_kwh=self._get_int(".gas-kwh", 0),
+                annual_electricity_kwh=annual_electricity_kwh,
+                annual_gas_kwh=annual_gas_kwh,
                 unit_rate=unit_rate,
                 standing_charge_day=standing_charge_day,
                 exit_fee=exit_fee,
-                annual_cost_current=self._get_float(".cost-current", 0.0),
+                annual_cost_current=annual_cost_,
                 annual_cost_new=annual_cost_new,
                 valid_from=self._get_datetime(".valid-from"),
                 valid_to=self._get_datetime(".valid-to"),
@@ -1063,22 +1300,6 @@ class ScrapeTariff:
         element = self.soup.select_one(selector)
         return element.get_text(strip=True) if element else default
 
-    def _get_int(self, selector: str, default: int = 0) -> int:
-        """Get integer value from CSS selector"""
-        text = self._get_text(selector)
-        try:
-            return int(text.replace(',', ''))
-        except (ValueError, AttributeError):
-            return default
-
-    def _get_float(self, selector: str, default: float = 0.0) -> float:
-        """Get float value from CSS selector"""
-        text = self._get_text(selector)
-        try:
-            cleaned = text.replace('£', '').replace(',', '').strip()
-            return float(cleaned)
-        except (ValueError, AttributeError):
-            return default
 
     def _get_bool(self, selector: str, default: bool = False) -> bool:
         """Get boolean value from CSS selector"""
@@ -1108,8 +1329,7 @@ if __name__ == "__main__":
             fuel_type="gas_and_electricity",  # 'gas', 'electricity', or 'gas_and_electricity'
             current_supplier="Octopus",
             pay_method="monthly_direct_debit",
-            has_ev="No but interested",
-            email="test@example.com",
+            has_ev="No but interested"
         )
 
         print(f"\nFound {len(tariffs)} tariffs\n{'='*50}")
@@ -1117,10 +1337,6 @@ if __name__ == "__main__":
             print(f"[{i}] {tariff.new_supplier_name} - {tariff.tariff_name}")
             print(f"    Annual cost: £{tariff.annual_cost_new}")
             print(f"    Unit rate: {tariff.unit_rate}p, Standing charge: {tariff.standing_charge_day}p\n")
-
-        # Example: save all tariffs
-        # for t in tariffs:
-        #     t.save("Current Supplier", "Direct Debit", False)
 
     except Exception as e:
         print(f"\n❌ Failed to scrape: {e}")

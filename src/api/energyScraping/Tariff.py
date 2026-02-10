@@ -15,7 +15,6 @@ class Tariff:
     new_supplier_name: str
     tariff_name: str
     tariff_type: str
-    pay_method: str
     fixed_price_length_months: int
     is_green: bool
 
@@ -77,7 +76,7 @@ class Tariff:
             query = """
             INSERT INTO fact_tariff_search_simple (
                 current_supplier_name, pay_method, EV_question, new_supplier_name, 
-                tariff_name, tariff_type, pay_method, fixed_price_length_months, 
+                tariff_name, tariff_type, fixed_price_length_months, 
                 is_green, region_code, region_name, dno_name, dno_id, postcode, 
                 outward_code, latitude, longitude, fuel_type, search_date, month, 
                 year, annual_electricity_kwh, annual_gas_kwh, unit_rate, 
@@ -85,7 +84,7 @@ class Tariff:
                 valid_from, valid_to, created_at, last_updated
             ) VALUES (
                 %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
             )
             """
 
@@ -96,7 +95,6 @@ class Tariff:
                 self.new_supplier_name,
                 self.tariff_name,
                 self.tariff_type,
-                self.pay_method,
                 self.fixed_price_length_months,
                 self.is_green,
                 self.region_code,
