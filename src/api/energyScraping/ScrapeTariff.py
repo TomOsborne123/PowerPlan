@@ -1316,27 +1316,4 @@ class ScrapeTariff:
         try:
             return datetime.strptime(text, '%Y-%m-%d')
         except (ValueError, AttributeError):
-            return datetime.now()
-
-# Usage example
-if __name__ == "__main__":
-    scraper = ScrapeTariff()
-
-    try:
-        tariffs = scraper.scrape(
-            postcode="N4 2JR",
-            address_index=0,  # Select first address
-            fuel_type="gas_and_electricity",  # 'gas', 'electricity', or 'gas_and_electricity'
-            current_supplier="Octopus",
-            pay_method="monthly_direct_debit",
-            has_ev="No but interested"
-        )
-
-        print(f"\nFound {len(tariffs)} tariffs\n{'='*50}")
-        for i, tariff in enumerate(tariffs, start=1):
-            print(f"[{i}] {tariff.new_supplier_name} - {tariff.tariff_name}")
-            print(f"    Annual cost: £{tariff.annual_cost_new}")
-            print(f"    Unit rate: {tariff.unit_rate}p, Standing charge: {tariff.standing_charge_day}p\n")
-
-    except Exception as e:
-        print(f"\n❌ Failed to scrape: {e}")
+            return datetime.now() 
