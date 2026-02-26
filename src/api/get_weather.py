@@ -1,7 +1,6 @@
 import openmeteo_requests
 import pandas as pd
 import requests_cache
-from pandas.core.methods.selectn import SelectNSeries
 from retry_requests import retry
 
 def get_weather(latitude, longitude, start_date, end_date, variables, frequency):
@@ -26,6 +25,9 @@ def get_weather(latitude, longitude, start_date, end_date, variables, frequency)
         "wind_direction_10m",
         "weather_code",
         "direct_radiation",
+        "shortwave_radiation",
+        "diffuse_radiation",
+        "direct_normal_irradiance",
         "relative_humidity_2m",
         "dew_point_2m",
         "apparent_temperature",
@@ -91,12 +93,16 @@ def get_weather(latitude, longitude, start_date, end_date, variables, frequency)
     params = {
         "latitude": latitude,
         "longitude": longitude,
-        "hourly": variables,
         "models": "ukmo_seamless",
         "wind_speed_unit": "ms",
         "start_date": start_date,
         "end_date": end_date,
     }
+    if frequency == "hourly":
+        params["hourly"] = variables
+    else:
+        params["daily"] = variables
+        params["timezone"] = "UTC"
 
     response_first = openmeteo.weather_api(url, params=params)[0]
 

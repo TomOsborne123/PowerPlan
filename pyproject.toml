@@ -16,7 +16,8 @@ dependencies = [
     "openmeteo-requests>=0.1",
     "mysql-connector-python>=9.5.0",
     "bs4>=0.0.2",
-    "urllib3>=2.6.3"
+    "urllib3>=2.6.3",
+    "pvlib>=0.10",
 ]
 
 [build-system]
