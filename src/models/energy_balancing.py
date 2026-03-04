@@ -1,139 +1,72 @@
 """
-Energy balancing model: lat/lon to solar and wind flux, then to energy options at different price tiers.
-Builds monthly generation profiles, accepts user consumption, and optimises system capacity to minimise estimated cost.
-Uses pvlib for solar and an in-repo power-curve model for wind.
+Energy balancing: location (lat/lon) + solar/wind capacity + generation-type params
+→ daily flux from weather API and daily solar/wind generation (no month scaling).
 """
 
 from __future__ import annotations
 
-import pandas as pd
+import calendar
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 
-# Typical UK monthly fractions of annual generation (sum = 1). Used when only short-run flux is available.
-# Solar: winter low, summer high.
-MONTHLY_FRACTION_SOLAR_UK = [
-    0.02, 0.03, 0.05, 0.07, 0.09, 0.11, 0.12, 0.11, 0.09, 0.06, 0.03, 0.02,
-]  # Jan..Dec
-# Wind: often higher in winter.
-MONTHLY_FRACTION_WIND_UK = [
-    0.11, 0.09, 0.09, 0.07, 0.06, 0.05, 0.05, 0.05, 0.06, 0.08, 0.09, 0.10,
-]  # Jan..Dec
-MONTH_LABELS = [
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-]
-
-# Default estimated pricing (£) for optimisation.
-DEFAULT_PRICING = {
-    "solar_capex_per_kw": 1500.0,   # £/kWp installed
-    "wind_capex_per_kw": 2500.0,    # £/kW nominal
-    "grid_price_per_kwh": 0.25,     # £/kWh imported
-    "export_price_per_kwh": 0.05,   # £/kWh exported (optional)
-}
-
-# Insulation: use R-value (thermal resistance, m²·K/W). Higher R = less heat loss.
-# Heating demand reduction = min(50%, R_value / INSULATION_R_VALUE_SCALE). Typical building R ~ 1–6 m²·K/W.
-INSULATION_R_VALUE_SCALE = 10.0   # R-value at which heating reduction caps at 50%
-INSULATION_R_VALUE_MAX_REDUCTION = 0.5
-
-# Optional pvlib for solar
-try:
-    import pvlib
-    from pvlib import solarposition, irradiance, temperature, pvsystem, inverter
-    PVLIB_AVAILABLE = True
-except ImportError:
-    PVLIB_AVAILABLE = False
+import pandas as pd
 
 __all__ = [
-    "get_flux",
-    "get_monthly_profiles",
-    "get_energy_options",
+    "get_flux_daily",
+    "get_flux_monthly_last_year",
+    "get_generation",
     "get_optimised_system",
     "optimize_system_capacity",
-    "evaluate_system_capacity",
     "DEFAULT_PRICING",
-    "INSULATION_R_VALUE_SCALE",
-    "SOLAR_TIERS",
-    "WIND_TIERS",
 ]
 
-# --- Default date range (forecast) ---
-def _default_dates():
+# Default pricing for sizing and financials (£)
+DEFAULT_PRICING = {
+    "solar_capex_per_kw": 1500.0,
+    "wind_capex_per_kw": 2500.0,
+    "grid_price_per_kwh": 0.25,
+    "export_price_per_kwh": 0.05,
+}
+
+
+def _default_dates() -> tuple[str, str]:
     start = datetime.utcnow().date()
     end = start + timedelta(days=6)
     return start.isoformat(), end.isoformat()
 
 
-# --- Solar tier config: budget / mid / premium (per kWp) ---
-SOLAR_TIERS = {
-    "budget": {
-        "pdc0_per_kwp": 1000.0,       # W per kWp (100% nameplate)
-        "gamma_pdc": -0.004,          # temp coefficient per °C
-        "system_losses": 0.18,        # total loss factor (soiling, mismatch, wiring, etc.)
-        "inverter_efficiency": 0.94,
-        "cost_band": "low",
-    },
-    "mid": {
-        "pdc0_per_kwp": 1050.0,
-        "gamma_pdc": -0.0035,
-        "system_losses": 0.14,
-        "inverter_efficiency": 0.96,
-        "cost_band": "medium",
-    },
-    "premium": {
-        "pdc0_per_kwp": 1100.0,
-        "gamma_pdc": -0.003,
-        "system_losses": 0.10,
-        "inverter_efficiency": 0.98,
-        "cost_band": "high",
-    },
-}
-
-# --- Wind tier config: power curve params (per kW nominal) ---
-WIND_TIERS = {
-    "budget": {
-        "v_cut_in": 3.0,    # m/s
-        "v_rated": 12.0,    # m/s
-        "v_cut_out": 25.0,
-        "power_exponent": 2.0,  # P ~ (v - v_cut_in)^k between cut-in and rated
-        "cost_band": "low",
-    },
-    "mid": {
-        "v_cut_in": 2.5,
-        "v_rated": 11.0,
-        "v_cut_out": 25.0,
-        "power_exponent": 2.2,
-        "cost_band": "medium",
-    },
-    "premium": {
-        "v_cut_in": 2.0,
-        "v_rated": 10.0,
-        "v_cut_out": 25.0,
-        "power_exponent": 2.5,
-        "cost_band": "high",
-    },
-}
+def _wind_power_curve(
+    v: float,
+    v_cut_in: float,
+    v_rated: float,
+    v_cut_out: float,
+    k: float,
+) -> float:
+    """Capacity factor per kW: 0 below cut-in, scaled between cut-in and rated, 1.0 at rated, 0 above cut-out."""
+    if v < v_cut_in or v >= v_cut_out:
+        return 0.0
+    if v >= v_rated:
+        return 1.0
+    return ((v - v_cut_in) / (v_rated - v_cut_in)) ** k
 
 
-def get_flux(
+def get_flux_daily(
     lat: float,
     lon: float,
     start_date: str | None = None,
     end_date: str | None = None,
 ) -> pd.DataFrame:
     """
-    Fetch hourly solar and wind flux for a location.
-    Returns a DataFrame with datetime index and columns: ghi, dhi, dni, wind_speed_10m, temperature_2m.
+    Fetch daily solar and wind flux for a location from the weather API.
+    Returns DataFrame with date index and columns: ghi_mj_per_m2, wind_speed_10m_max.
     """
     from src.api.get_weather import get_weather
 
-    start_date, end_date = start_date or _default_dates()[0], end_date or _default_dates()[1]
+    start_date = start_date or _default_dates()[0]
+    end_date = end_date or _default_dates()[1]
     variables = [
-        "shortwave_radiation",
-        "diffuse_radiation",
-        "direct_normal_irradiance",
-        "wind_speed_10m",
-        "temperature_2m",
+        "shortwave_radiation_sum",
+        "wind_speed_10m_max",
     ]
     df = get_weather(
         latitude=lat,
@@ -141,371 +74,291 @@ def get_flux(
         start_date=start_date,
         end_date=end_date,
         variables=variables,
-        frequency="hourly",
+        frequency="daily",
     )
-    df = df.rename(columns={
-        "shortwave_radiation": "ghi",
-        "diffuse_radiation": "dhi",
-        "direct_normal_irradiance": "dni",
-    })
+    # Open-Meteo daily shortwave_radiation_sum is in MJ/m² (megajoules per m²)
+    df = df.rename(columns={"shortwave_radiation_sum": "ghi_mj_per_m2"})
     df["date"] = pd.to_datetime(df["date"], utc=True)
     df = df.set_index("date")
     return df
 
 
-def _wind_power_curve(v: float, v_cut_in: float, v_rated: float, v_cut_out: float, k: float) -> float:
-    """Power output per kW nominal: 0 below cut-in, scaled between cut-in and rated, 1.0 at rated, 0 above cut-out."""
-    if v < v_cut_in or v >= v_cut_out:
-        return 0.0
-    if v >= v_rated:
-        return 1.0
-    # P = ((v - v_cut_in) / (v_rated - v_cut_in)) ** k
-    return ((v - v_cut_in) / (v_rated - v_cut_in)) ** k
+def get_flux_monthly_last_year(lat: float, lon: float) -> pd.DataFrame:
+    """
+    Fetch last calendar year's weather from the Historical API, aggregated by month (12 rows).
+    Returns DataFrame with index month (1–12) and columns: ghi_mj_per_m2 (monthly sum, MJ/m²),
+    wind_speed_10m_max (monthly mean, m/s), days_in_month.
+    Used by optimisation when flux_source='last_year_monthly'.
+    """
+    from src.api.get_weather import get_weather_last_year_monthly
+
+    monthly = get_weather_last_year_monthly(
+        lat, lon,
+        variables=["shortwave_radiation_sum", "wind_speed_10m_max"],
+    )
+    last_year = datetime.utcnow().year - 1
+    monthly = monthly.rename(columns={"shortwave_radiation_sum": "ghi_mj_per_m2"})
+    monthly["days_in_month"] = [calendar.monthrange(last_year, m)[1] for m in monthly.index]
+    return monthly
 
 
-def _annual_solar_kwh_per_kw(
-    flux_df: pd.DataFrame,
-    lat: float,
-    lon: float,
-    tier_cfg: dict[str, Any],
+def _daily_solar_kwh(
+    ghi_mj_per_m2: float,
+    capacity_kw: float,
+    solar_type_params: dict[str, Any],
 ) -> float:
-    """Compute annual AC kWh per kWp for one solar tier (uses period in flux_df, scaled to 365 days)."""
-    if not PVLIB_AVAILABLE:
-        return 0.0
-    times = flux_df.index
-    ghi = flux_df["ghi"].fillna(0)
-    dhi = flux_df["dhi"].fillna(0)
-    dni = flux_df["dni"].fillna(0)
-    temp_air = flux_df["temperature_2m"].reindex(times).fillna(15.0)
-    location = pvlib.location.Location(lat, lon, tz=times.tz or "UTC")
-    solar_pos = solarposition.get_solarposition(times, location.latitude, location.longitude)
-    surface_tilt = min(45.0, max(10.0, lat))
-    surface_azimuth = 180.0
-    poa = irradiance.get_total_irradiance(
-        surface_tilt=surface_tilt,
-        surface_azimuth=surface_azimuth,
-        solar_zenith=solar_pos["zenith"],
-        solar_azimuth=solar_pos["azimuth"],
-        ghi=ghi,
-        dhi=dhi,
-        dni=dni,
-    )
-    poa_global = poa["poa_global"].fillna(0).clip(lower=0)
-    temp_cell = temp_air + (poa_global / 1000.0) * 25.0
-    pdc0 = tier_cfg["pdc0_per_kwp"]
-    gamma_pdc = tier_cfg["gamma_pdc"]
-    system_losses = tier_cfg["system_losses"]
-    eta_inv = tier_cfg["inverter_efficiency"]
-    dc_per_kwp = pvsystem.pvwatts_dc(poa_global, temp_cell, pdc0=pdc0, gamma_pdc=gamma_pdc)
-    dc_per_kwp = dc_per_kwp * (1.0 - system_losses)
-    ac_per_kwp = inverter.pvwatts(dc_per_kwp, pdc0=pdc0, eta_inv_nom=eta_inv)
-    period_hours = len(flux_df)
-    period_days = period_hours / 24.0
-    scale_to_annual = 365.0 / period_days if period_days > 0 else 1.0
-    energy_kwh_period = ac_per_kwp.sum() / 1000.0
-    return float(energy_kwh_period * scale_to_annual)
+    """Daily solar energy (kWh) from daily GHI sum (MJ/m², Open-Meteo convention), capacity (kW), and type params."""
+    if capacity_kw <= 0 or ghi_mj_per_m2 != ghi_mj_per_m2 or ghi_mj_per_m2 <= 0:
+        return 0.0  # NaN check: x != x is True for NaN
+    # GHI MJ/m² → kWh/m² (1 MJ = 1/3.6 kWh)
+    ghi_kwh_m2 = ghi_mj_per_m2 / 3.6
+    losses = solar_type_params.get("system_losses", 0.14)
+    inv_eff = solar_type_params.get("inverter_efficiency", 0.96)
+    pdc0 = solar_type_params.get("pdc0_per_kwp", 1000.0)
+    # kWh = capacity_kw * (kWh/m²) * (W/kWp at STC) / 1000 * (1 - losses) * inv_eff
+    # At 1000 W/m², 1 kWp gives 1 kW; at ghi_kwh_m2 we get ghi_kwh_m2 * 1 * (1-losses)*inv
+    return capacity_kw * ghi_kwh_m2 * (pdc0 / 1000.0) * (1.0 - losses) * inv_eff
 
 
-def _annual_wind_kwh_per_kw(flux_df: pd.DataFrame, tier_cfg: dict[str, Any]) -> float:
-    """Compute annual kWh per kW for one wind tier (uses period in flux_df, scaled to 365 days)."""
-    wind_speed = flux_df["wind_speed_10m"].fillna(0)
-    period_hours = len(flux_df)
-    period_days = period_hours / 24.0
-    scale_to_annual = 365.0 / period_days if period_days > 0 else 1.0
-    v_ci, v_r, v_co, k = tier_cfg["v_cut_in"], tier_cfg["v_rated"], tier_cfg["v_cut_out"], tier_cfg["power_exponent"]
-    cf_series = wind_speed.apply(lambda v: _wind_power_curve(float(v), v_ci, v_r, v_co, k))
-    energy_kwh_period = cf_series.mean() * period_hours
-    return float(energy_kwh_period * scale_to_annual)
+def _daily_wind_kwh(
+    wind_speed_mps: float,
+    capacity_kw: float,
+    wind_type_params: dict[str, Any],
+) -> float:
+    """Daily wind energy (kWh) from daily wind speed (m/s), capacity (kW), and type params."""
+    if capacity_kw <= 0 or wind_speed_mps != wind_speed_mps:
+        return 0.0  # NaN check
+    v_ci = wind_type_params["v_cut_in"]
+    v_r = wind_type_params["v_rated"]
+    v_co = wind_type_params["v_cut_out"]
+    k = wind_type_params["power_exponent"]
+    cf = _wind_power_curve(float(wind_speed_mps), v_ci, v_r, v_co, k)
+    return capacity_kw * cf * 24.0
 
 
-def get_monthly_profiles(
-    flux_df: pd.DataFrame,
-    lat: float,
-    lon: float,
-    solar_tier: str = "mid",
-    wind_tier: str = "mid",
-    solar_tiers_config: dict[str, Any] | None = None,
-    wind_tiers_config: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """
-    Build monthly generation profiles (kWh per kW) for solar and wind from flux data.
-    Uses typical UK monthly fractions to distribute annual generation when flux is a short sample.
-    Returns dict with keys: monthly_profile (DataFrame), solar_kwh_per_kw (list of 12), wind_kwh_per_kw (list of 12),
-    annual_solar_per_kw, annual_wind_per_kw.
-    """
-    solar_tiers = solar_tiers_config or SOLAR_TIERS
-    wind_tiers = wind_tiers_config or WIND_TIERS
-    annual_solar = _annual_solar_kwh_per_kw(flux_df, lat, lon, solar_tiers[solar_tier])
-    annual_wind = _annual_wind_kwh_per_kw(flux_df, wind_tiers[wind_tier])
-    solar_kwh_per_kw = [annual_solar * f for f in MONTHLY_FRACTION_SOLAR_UK]
-    wind_kwh_per_kw = [annual_wind * f for f in MONTHLY_FRACTION_WIND_UK]
-    monthly_profile = pd.DataFrame({
-        "month": MONTH_LABELS,
-        "solar_kwh_per_kw": solar_kwh_per_kw,
-        "wind_kwh_per_kw": wind_kwh_per_kw,
-    })
-    return {
-        "monthly_profile": monthly_profile,
-        "solar_kwh_per_kw": solar_kwh_per_kw,
-        "wind_kwh_per_kw": wind_kwh_per_kw,
-        "annual_solar_per_kw": annual_solar,
-        "annual_wind_per_kw": annual_wind,
-    }
-
-
-def run_solar_options(
-    flux_df: pd.DataFrame,
-    lat: float,
-    lon: float,
-    tiers_config: dict[str, Any] | None = None,
-) -> list[dict[str, Any]]:
-    """
-    Run solar PV model for each tier. Returns list of option dicts (technology, tier, capacity_kw, annual_energy_kwh, cost_band, etc.).
-    Energy is computed for the period in flux_df and scaled to annual (period_days -> 365).
-    """
-    if not PVLIB_AVAILABLE:
-        return []
-    tiers = tiers_config or SOLAR_TIERS
-    times = flux_df.index
-    ghi = flux_df["ghi"].fillna(0)
-    dhi = flux_df["dhi"].fillna(0)
-    dni = flux_df["dni"].fillna(0)
-    temp_air = flux_df["temperature_2m"].reindex(times).fillna(15.0)
-
-    location = pvlib.location.Location(lat, lon, tz=times.tz or "UTC")
-    solar_pos = solarposition.get_solarposition(times, location.latitude, location.longitude)
-    # Fixed tilt/azimuth: tilt ~ latitude, azimuth 180 = south (northern hemisphere)
-    surface_tilt = min(45.0, max(10.0, lat))
-    surface_azimuth = 180.0
-
-    poa = irradiance.get_total_irradiance(
-        surface_tilt=surface_tilt,
-        surface_azimuth=surface_azimuth,
-        solar_zenith=solar_pos["zenith"],
-        solar_azimuth=solar_pos["azimuth"],
-        ghi=ghi,
-        dhi=dhi,
-        dni=dni,
-    )
-    poa_global = poa["poa_global"].fillna(0).clip(lower=0)
-
-    # Simple cell temperature: temp_air + (poa/1000)*25
-    temp_cell = temp_air + (poa_global / 1000.0) * 25.0
-
-    options = []
-    period_hours = len(flux_df)
-    period_days = period_hours / 24.0
-    scale_to_annual = 365.0 / period_days if period_days > 0 else 1.0
-
-    for tier_name, cfg in tiers.items():
-        pdc0 = cfg["pdc0_per_kwp"]
-        gamma_pdc = cfg["gamma_pdc"]
-        system_losses = cfg["system_losses"]
-        eta_inv = cfg["inverter_efficiency"]
-
-        dc_per_kwp = pvsystem.pvwatts_dc(
-            poa_global,
-            temp_cell,
-            pdc0=pdc0,
-            gamma_pdc=gamma_pdc,
-        )
-        dc_per_kwp = dc_per_kwp * (1.0 - system_losses)
-        ac_per_kwp = inverter.pvwatts(dc_per_kwp, pdc0=pdc0, eta_inv_nom=eta_inv)
-
-        energy_wh = ac_per_kwp.sum()
-        energy_kwh_period = energy_wh / 1000.0
-        annual_energy_kwh = energy_kwh_period * scale_to_annual
-
-        options.append({
-            "technology": "solar",
-            "tier": tier_name,
-            "capacity_kw": 1.0,
-            "annual_energy_kwh": round(annual_energy_kwh, 1),
-            "cost_band": cfg["cost_band"],
-            "period_days": round(period_days, 1),
-            "capacity_factor": round(annual_energy_kwh / (1.0 * 8760) * 100, 2) if annual_energy_kwh else 0.0,
-        })
-    return options
-
-
-def run_wind_options(
-    flux_df: pd.DataFrame,
-    tiers_config: dict[str, Any] | None = None,
-) -> list[dict[str, Any]]:
-    """
-    Run wind power-curve model for each tier. Returns list of option dicts.
-    Output is per kW nominal capacity; energy is scaled to annual.
-    """
-    tiers = tiers_config or WIND_TIERS
-    wind_speed = flux_df["wind_speed_10m"].fillna(0)
-    period_hours = len(flux_df)
-    period_days = period_hours / 24.0
-    scale_to_annual = 365.0 / period_days if period_days > 0 else 1.0
-
-    options = []
-    for tier_name, cfg in tiers.items():
-        v_ci = cfg["v_cut_in"]
-        v_r = cfg["v_rated"]
-        v_co = cfg["v_cut_out"]
-        k = cfg["power_exponent"]
-
-        cf_series = wind_speed.apply(
-            lambda v: _wind_power_curve(float(v), v_ci, v_r, v_co, k)
-        )
-        capacity_factor_period = cf_series.mean()
-        # Energy per kW in period: CF * 1 kW * hours
-        energy_kwh_period = capacity_factor_period * period_hours
-        annual_energy_kwh = energy_kwh_period * scale_to_annual
-        capacity_factor_annual = cf_series.mean()  # same as period for CF
-
-        options.append({
-            "technology": "wind",
-            "tier": tier_name,
-            "capacity_kw": 1.0,
-            "annual_energy_kwh": round(annual_energy_kwh, 1),
-            "cost_band": cfg["cost_band"],
-            "period_days": round(period_days, 1),
-            "capacity_factor": round(capacity_factor_annual * 100, 2),
-        })
-    return options
-
-
-def get_energy_options(
+def get_generation(
     latitude: float,
     longitude: float,
+    solar_capacity_kw: float,
+    wind_capacity_kw: float,
+    solar_type_params: dict[str, Any],
+    wind_type_params: dict[str, Any],
     start_date: str | None = None,
     end_date: str | None = None,
-    solar_tiers: dict[str, Any] | None = None,
-    wind_tiers: dict[str, Any] | None = None,
-) -> list[dict[str, Any]]:
+) -> pd.DataFrame:
     """
-    Get combined solar and wind energy options at different price points for a location.
-    Returns a list of option dicts with technology, tier, capacity_kw, annual_energy_kwh, cost_band, etc.
-    """
-    flux_df = get_flux(latitude, longitude, start_date, end_date)
-    options = []
-    options.extend(run_solar_options(flux_df, latitude, longitude, solar_tiers))
-    options.extend(run_wind_options(flux_df, wind_tiers))
-    return options
+    Get daily solar and wind generation for a location and capacity.
 
+    Inputs:
+        latitude, longitude: location
+        solar_capacity_kw, wind_capacity_kw: system capacities (kW)
+        solar_type_params, wind_type_params: generation-type dicts (e.g. from src.data.energy_tiers.SOLAR_TIERS["budget"])
+        start_date, end_date: optional date range (default: next 7 days)
 
-def _monthly_consumption_from_input(
-    monthly_consumption_kwh: list[float] | None = None,
-    annual_consumption_kwh: float | None = None,
-    monthly_fraction: list[float] | None = None,
-) -> list[float]:
+    Returns:
+        DataFrame with date index and columns: ghi_mj_per_m2, wind_speed_10m_max,
+        solar_gen_kwh, wind_gen_kwh, total_gen_kwh. (ghi_mj_per_m2 = daily GHI in MJ/m².)
     """
-    Return a list of 12 monthly consumption values (kWh).
-    Either pass monthly_consumption_kwh (length 12) or annual_consumption_kwh.
-    If annual, monthly_fraction (length 12, sum 1) spreads it; default is flat 1/12.
-    """
-    if monthly_consumption_kwh is not None:
-        if len(monthly_consumption_kwh) != 12:
-            raise ValueError("monthly_consumption_kwh must have 12 elements")
-        return list(monthly_consumption_kwh)
-    if annual_consumption_kwh is None:
-        raise ValueError("Provide either monthly_consumption_kwh or annual_consumption_kwh")
-    frac = monthly_fraction or [1.0 / 12] * 12
-    if len(frac) != 12:
-        raise ValueError("monthly_fraction must have 12 elements")
-    return [annual_consumption_kwh * f for f in frac]
-
-
-def _insulation_reduction_from_r_value(r_value: float) -> float:
-    """
-    Fraction of heating demand reduced from R-value (m²·K/W).
-    Linear in R up to INSULATION_R_VALUE_SCALE, then capped at INSULATION_R_VALUE_MAX_REDUCTION.
-    """
-    if r_value <= 0:
-        return 0.0
-    return min(
-        INSULATION_R_VALUE_MAX_REDUCTION,
-        (r_value / INSULATION_R_VALUE_SCALE) * INSULATION_R_VALUE_MAX_REDUCTION,
+    flux = get_flux_daily(latitude, longitude, start_date, end_date)
+    flux = flux.copy()
+    flux["solar_gen_kwh"] = flux["ghi_mj_per_m2"].fillna(0).map(
+        lambda g: _daily_solar_kwh(g, solar_capacity_kw, solar_type_params)
     )
+    flux["wind_gen_kwh"] = flux["wind_speed_10m_max"].fillna(0).map(
+        lambda v: _daily_wind_kwh(v, wind_capacity_kw, wind_type_params)
+    )
+    flux["total_gen_kwh"] = flux["solar_gen_kwh"] + flux["wind_gen_kwh"]
+    return flux
 
 
-def _apply_insulation(
-    monthly_consumption_kwh: list[float],
-    insulation_r_value: float = 0.0,
-    heating_fraction: float = 0.6,
-) -> list[float]:
+def _annual_generation_from_flux(
+    flux: pd.DataFrame,
+    solar_capacity_kw: float,
+    wind_capacity_kw: float,
+    solar_type_params: dict[str, Any],
+    wind_type_params: dict[str, Any],
+) -> tuple[float, float]:
     """
-    Reduce monthly demand to reflect insulation (applies to heating share of demand).
-    insulation_r_value: R-value in m²·K/W (thermal resistance; 0 = none, typical 1–6, high 8+).
-    heating_fraction: share of total demand that is space heating (default 0.6 for UK).
-    Returns new monthly consumption (kWh) after insulation savings.
+    From daily flux, compute annualised solar and wind generation (kWh).
+    Annualises using 365 / period_days (period = length of flux).
+    Returns (annual_solar_kwh, annual_wind_kwh).
     """
-    reduction = _insulation_reduction_from_r_value(insulation_r_value)
-    if reduction <= 0 or heating_fraction <= 0:
-        return list(monthly_consumption_kwh)
-    scale = 1.0 - heating_fraction * reduction
-    return [c * scale for c in monthly_consumption_kwh]
+    period_days = len(flux)
+    if period_days <= 0:
+        return 0.0, 0.0
+    flux = flux.copy()
+    flux["solar_gen_kwh"] = flux["ghi_mj_per_m2"].fillna(0).map(
+        lambda g: _daily_solar_kwh(g, solar_capacity_kw, solar_type_params)
+    )
+    flux["wind_gen_kwh"] = flux["wind_speed_10m_max"].fillna(0).map(
+        lambda v: _daily_wind_kwh(v, wind_capacity_kw, wind_type_params)
+    )
+    period_solar = flux["solar_gen_kwh"].sum()
+    period_wind = flux["wind_gen_kwh"].sum()
+    scale = 365.0 / period_days
+    return period_solar * scale, period_wind * scale
+
+
+def _annual_generation_from_flux_monthly(
+    flux_monthly: pd.DataFrame,
+    solar_capacity_kw: float,
+    wind_capacity_kw: float,
+    solar_type_params: dict[str, Any],
+    wind_type_params: dict[str, Any],
+) -> tuple[float, float]:
+    """
+    From monthly flux (12 rows: index month 1–12, columns ghi_mj_per_m2, wind_speed_10m_max, days_in_month),
+    compute annual solar and wind generation (kWh). No scaling; full year of data.
+    Returns (annual_solar_kwh, annual_wind_kwh).
+    """
+    if len(flux_monthly) != 12 or "days_in_month" not in flux_monthly.columns:
+        return 0.0, 0.0
+    annual_solar = 0.0
+    annual_wind = 0.0
+    for month in flux_monthly.index:
+        ghi_mj = float(flux_monthly.loc[month, "ghi_mj_per_m2"])
+        wind_mps = float(flux_monthly.loc[month, "wind_speed_10m_max"])
+        days = int(flux_monthly.loc[month, "days_in_month"])
+        if ghi_mj != ghi_mj or ghi_mj < 0:
+            ghi_mj = 0.0  # NaN or invalid
+        if wind_mps != wind_mps or wind_mps < 0:
+            wind_mps = 0.0
+        # Archive API may return monthly sum in J/m²; convert to MJ if value is very large
+        if ghi_mj > 1e6:
+            ghi_mj = ghi_mj / 1e6
+        # Monthly GHI sum in MJ → monthly solar kWh (same formula as daily)
+        annual_solar += _daily_solar_kwh(ghi_mj, solar_capacity_kw, solar_type_params)
+        # Monthly mean wind speed → daily equivalent × days
+        annual_wind += _daily_wind_kwh(wind_mps, wind_capacity_kw, wind_type_params) * days
+    return annual_solar, annual_wind
+
+
+# Month labels for monthly breakdown (Jan–Dec)
+MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+
+def _monthly_generation_breakdown(
+    flux_monthly: pd.DataFrame,
+    solar_capacity_kw: float,
+    wind_capacity_kw: float,
+    solar_type_params: dict[str, Any],
+    wind_type_params: dict[str, Any],
+) -> tuple[list[float], list[float]]:
+    """
+    From monthly flux (12 rows), return (monthly_solar_kwh, monthly_wind_kwh) as lists of 12.
+    """
+    if len(flux_monthly) != 12 or "days_in_month" not in flux_monthly.columns:
+        return [0.0] * 12, [0.0] * 12
+    solar_list: list[float] = []
+    wind_list: list[float] = []
+    for month in flux_monthly.index:
+        ghi_mj = float(flux_monthly.loc[month, "ghi_mj_per_m2"])
+        wind_mps = float(flux_monthly.loc[month, "wind_speed_10m_max"])
+        days = int(flux_monthly.loc[month, "days_in_month"])
+        if ghi_mj != ghi_mj or ghi_mj < 0:
+            ghi_mj = 0.0
+        if wind_mps != wind_mps or wind_mps < 0:
+            wind_mps = 0.0
+        if ghi_mj > 1e6:
+            ghi_mj = ghi_mj / 1e6
+        solar_list.append(_daily_solar_kwh(ghi_mj, solar_capacity_kw, solar_type_params))
+        wind_list.append(_daily_wind_kwh(wind_mps, wind_capacity_kw, wind_type_params) * days)
+    return solar_list, wind_list
 
 
 def optimize_system_capacity(
-    monthly_consumption_kwh: list[float],
-    monthly_solar_kwh_per_kw: list[float],
-    monthly_wind_kwh_per_kw: list[float],
+    flux: pd.DataFrame,
+    annual_consumption_kwh: float,
+    solar_type_params: dict[str, Any],
+    wind_type_params: dict[str, Any],
     solar_capex_per_kw: float = DEFAULT_PRICING["solar_capex_per_kw"],
     wind_capex_per_kw: float = DEFAULT_PRICING["wind_capex_per_kw"],
     grid_price_per_kwh: float = DEFAULT_PRICING["grid_price_per_kwh"],
-    export_price_per_kwh: float | None = DEFAULT_PRICING["export_price_per_kwh"],
+    export_price_per_kwh: float = DEFAULT_PRICING["export_price_per_kwh"],
     solar_max_kw: float = 20.0,
     wind_max_kw: float = 10.0,
     step_kw: float = 0.5,
-    min_demand_met_from_gen_pct: float = 0.0,
-    years: float = 25.0,
+    optimize_over_years: float = 5.0,
+    flux_frequency: Literal["daily", "monthly"] | None = None,
+    min_demand_met_from_gen_pct: float = 50.0,
+    min_solar_kw: float = 0.0,
+    min_wind_kw: float = 0.5,
 ) -> dict[str, Any]:
     """
-    Find solar and wind capacity (kW) that minimises total cost over `years` to meet demand:
-    capex + (annual grid import cost - annual export revenue) * years.
-    Payback: years for capex to be recovered by annual savings vs grid-only.
-    min_demand_met_from_gen_pct (0–100): require at least this share from own generation.
-    Returns dict with optimal_solar_kw, optimal_wind_kw, total_capacity_kw, capex, payback_years,
-    cost_over_years, annual_opex_*, demand_met_from_generation_pct, monthly_balance (DataFrame).
+    Find solar and wind capacity (kW) that minimises total cost over `optimize_over_years`.
+    Flux can be daily (short period, then annualised) or monthly (12 rows from last year, no scaling).
+    Demand is annual_consumption_kwh.
+    min_demand_met_from_gen_pct: require at least this % of demand from own generation (0–100);
+        avoids choosing 0 kW when grid-only is cheapest.
+    min_solar_kw, min_wind_kw: only consider solutions with at least this much solar/wind (default 0.5 kW wind).
+
+    Returns dict with optimal_solar_kw, optimal_wind_kw, annual_demand_kwh, annual_generation_kwh,
+    demand_met_from_generation_pct, capex, annual_import_kwh, annual_export_kwh, annual_net_opex,
+    financials_0_year, financials_5_year, financials_10_year, and monthly_balance (DataFrame of
+    solar/wind/demand/import/export by month when flux is monthly; None otherwise).
     """
-    best_cost = float("inf")
+    if flux_frequency is None:
+        flux_frequency = (
+            "monthly"
+            if len(flux) == 12 and "days_in_month" in flux.columns
+            else "daily"
+        )
+    if flux_frequency == "monthly":
+        if len(flux) != 12 or "days_in_month" not in flux.columns:
+            raise ValueError("monthly flux must have 12 rows and column 'days_in_month'")
+        period_days = 365
+    else:
+        period_days = len(flux)
+    if period_days <= 0:
+        raise ValueError("flux must contain at least one day or 12 months")
+    export_price = export_price_per_kwh
+
+    def annual_gen(solar_kw: float, wind_kw: float) -> tuple[float, float]:
+        if flux_frequency == "monthly":
+            return _annual_generation_from_flux_monthly(
+                flux, solar_kw, wind_kw, solar_type_params, wind_type_params
+            )
+        return _annual_generation_from_flux(
+            flux, solar_kw, wind_kw, solar_type_params, wind_type_params
+        )
+
+    best_total_cost: float = float("inf")
     best_solar = 0.0
     best_wind = 0.0
-    best_monthly_import = None
-    best_monthly_export = None
-    export_price = export_price_per_kwh if export_price_per_kwh is not None else 0.0
-    annual_demand = sum(monthly_consumption_kwh)
+    best_annual_import = 0.0
+    best_annual_export = 0.0
+    best_annual_gen = 0.0
+    best_annual_solar = 0.0
+    best_annual_wind = 0.0
 
-    solar_kw = 0.0
+    solar_kw = min_solar_kw
     while solar_kw <= solar_max_kw:
-        wind_kw = 0.0
+        wind_kw = min_wind_kw
         while wind_kw <= wind_max_kw:
-            annual_import_cost = 0.0
-            annual_export_revenue = 0.0
-            annual_gen = 0.0
-            monthly_import = []
-            monthly_export = []
-            for m in range(12):
-                gen = solar_kw * monthly_solar_kwh_per_kw[m] + wind_kw * monthly_wind_kwh_per_kw[m]
-                annual_gen += gen
-                demand = monthly_consumption_kwh[m]
-                imp = max(0.0, demand - gen)
-                exp = max(0.0, gen - demand)
-                monthly_import.append(imp)
-                monthly_export.append(exp)
-                annual_import_cost += imp * grid_price_per_kwh
-                annual_export_revenue += exp * export_price
-            demand_met_pct = (annual_gen / annual_demand * 100.0) if annual_demand > 0 else 0.0
-            if demand_met_pct < min_demand_met_from_gen_pct:
+            annual_solar, annual_wind = annual_gen(solar_kw, wind_kw)
+            total_annual_gen = annual_solar + annual_wind
+            demand_met_pct = (total_annual_gen / annual_consumption_kwh * 100.0) if annual_consumption_kwh > 0 else 0.0
+            if min_demand_met_from_gen_pct > 0 and demand_met_pct < min_demand_met_from_gen_pct:
                 wind_kw += step_kw
                 if wind_kw > wind_max_kw:
                     break
                 continue
+            annual_import = max(0.0, annual_consumption_kwh - total_annual_gen)
+            annual_export = max(0.0, total_annual_gen - annual_consumption_kwh)
             capex = solar_kw * solar_capex_per_kw + wind_kw * wind_capex_per_kw
-            annual_net_opex = annual_import_cost - annual_export_revenue
-            total_cost = capex + annual_net_opex * years
-            if total_cost < best_cost:
-                best_cost = total_cost
+            annual_opex_import = annual_import * grid_price_per_kwh
+            annual_opex_export_revenue = annual_export * export_price
+            annual_net_opex = annual_opex_import - annual_opex_export_revenue
+            total_cost = capex + annual_net_opex * optimize_over_years
+            if total_cost < best_total_cost:
+                best_total_cost = total_cost
                 best_solar = solar_kw
                 best_wind = wind_kw
-                best_monthly_import = monthly_import
-                best_monthly_export = monthly_export
+                best_annual_import = annual_import
+                best_annual_export = annual_export
+                best_annual_gen = total_annual_gen
+                best_annual_solar = annual_solar
+                best_annual_wind = annual_wind
             wind_kw += step_kw
             if wind_kw > wind_max_kw:
                 break
@@ -514,193 +367,149 @@ def optimize_system_capacity(
             break
 
     capex = best_solar * solar_capex_per_kw + best_wind * wind_capex_per_kw
-    opex_import = sum(imp * grid_price_per_kwh for imp in (best_monthly_import or [0] * 12))
-    opex_export = sum(exp * export_price for exp in (best_monthly_export or [0] * 12))
-    monthly_balance_df = pd.DataFrame({
-        "month": MONTH_LABELS,
-        "consumption_kwh": monthly_consumption_kwh,
-        "solar_gen_kwh": [best_solar * monthly_solar_kwh_per_kw[m] for m in range(12)],
-        "wind_gen_kwh": [best_wind * monthly_wind_kwh_per_kw[m] for m in range(12)],
-        "grid_import_kwh": best_monthly_import or [0] * 12,
-        "export_kwh": best_monthly_export or [0] * 12,
-    })
-    monthly_balance_df["total_gen_kwh"] = monthly_balance_df["solar_gen_kwh"] + monthly_balance_df["wind_gen_kwh"]
+    solar_capex = best_solar * solar_capex_per_kw
+    wind_capex = best_wind * wind_capex_per_kw
+    opex_import = best_annual_import * grid_price_per_kwh
+    opex_export_revenue = best_annual_export * export_price
+    annual_net_opex = opex_import - opex_export_revenue
+    demand_met_pct = (best_annual_gen / annual_consumption_kwh * 100.0) if annual_consumption_kwh > 0 else 0.0
 
-    annual_demand_kwh = sum(monthly_consumption_kwh)
-    annual_gen_kwh = monthly_balance_df["total_gen_kwh"].sum()
-    demand_met_from_gen_pct = (annual_gen_kwh / annual_demand_kwh * 100.0) if annual_demand_kwh > 0 else 0.0
-    total_capacity_kw = best_solar + best_wind
-    annual_net_opex = opex_import - opex_export
-    cost_over_years = capex + annual_net_opex * years
-    # Payback: years for capex to be recovered by savings vs grid-only (annual_demand * grid_price - annual_net_opex)
-    grid_only_annual_cost = annual_demand_kwh * grid_price_per_kwh
-    annual_savings = grid_only_annual_cost - annual_net_opex
-    if annual_savings > 0 and capex > 0:
-        payback_years = capex / annual_savings
+    # Payback: years for each technology's capex to be recovered by its annual savings (import offset + export revenue)
+    total_export = best_annual_export
+    if best_annual_gen > 0:
+        solar_share = best_annual_solar / best_annual_gen
+        wind_share = best_annual_wind / best_annual_gen
     else:
-        payback_years = None
+        solar_share = wind_share = 0.0
+    used_on_site = min(best_annual_gen, annual_consumption_kwh)
+    solar_used = used_on_site * solar_share
+    solar_exported = total_export * solar_share
+    wind_used = used_on_site * wind_share
+    wind_exported = total_export * wind_share
+    annual_solar_savings = solar_used * grid_price_per_kwh + solar_exported * export_price
+    annual_wind_savings = wind_used * grid_price_per_kwh + wind_exported * export_price
+    payback_solar_years = round(solar_capex / annual_solar_savings, 1) if (solar_capex > 0 and annual_solar_savings > 0) else None
+    payback_wind_years = round(wind_capex / annual_wind_savings, 1) if (wind_capex > 0 and annual_wind_savings > 0) else None
+
+    # Monthly breakdown over the year (when we have monthly flux) for exploring solar vs wind by month
+    monthly_balance: pd.DataFrame | None = None
+    if flux_frequency == "monthly" and len(flux) == 12:
+        monthly_solar, monthly_wind = _monthly_generation_breakdown(
+            flux, best_solar, best_wind, solar_type_params, wind_type_params
+        )
+        # Simple demand split: flat 1/12 of annual (override with monthly_fraction if needed later)
+        monthly_demand = [annual_consumption_kwh / 12.0] * 12
+        monthly_import = [max(0.0, monthly_demand[i] - monthly_solar[i] - monthly_wind[i]) for i in range(12)]
+        monthly_export = [max(0.0, monthly_solar[i] + monthly_wind[i] - monthly_demand[i]) for i in range(12)]
+        monthly_balance = pd.DataFrame({
+            "month": MONTH_LABELS,
+            "solar_kwh": [round(x, 1) for x in monthly_solar],
+            "wind_kwh": [round(x, 1) for x in monthly_wind],
+            "total_gen_kwh": [round(monthly_solar[i] + monthly_wind[i], 1) for i in range(12)],
+            "demand_kwh": [round(monthly_demand[i], 1) for i in range(12)],
+            "import_kwh": [round(monthly_import[i], 1) for i in range(12)],
+            "export_kwh": [round(monthly_export[i], 1) for i in range(12)],
+        })
+
+    def _financials(n_years: float) -> dict[str, float]:
+        opex_total = annual_net_opex * n_years
+        return {
+            "capex": round(capex, 2),
+            "opex_total": round(opex_total, 2),
+            "total": round(capex + opex_total, 2),
+        }
 
     return {
         "optimal_solar_kw": round(best_solar, 2),
         "optimal_wind_kw": round(best_wind, 2),
-        "total_capacity_kw": round(total_capacity_kw, 2),
-        "capex": round(capex, 2),
-        "annual_opex_import_cost": round(opex_import, 2),
-        "annual_export_revenue": round(opex_export, 2),
-        "annual_net_opex": round(annual_net_opex, 2),
-        "years_considered": years,
-        "total_annual_cost_estimate": round(capex + annual_net_opex, 2),
-        "cost_over_years": round(cost_over_years, 2),
-        "payback_years": round(payback_years, 1) if payback_years is not None else None,
-        "annual_demand_kwh": round(annual_demand_kwh, 1),
-        "annual_generation_kwh": round(annual_gen_kwh, 1),
-        "demand_met_from_generation_pct": round(demand_met_from_gen_pct, 1),
-        "monthly_balance": monthly_balance_df,
-        "monthly_profile_solar_kwh_per_kw": monthly_solar_kwh_per_kw,
-        "monthly_profile_wind_kwh_per_kw": monthly_wind_kwh_per_kw,
-    }
-
-
-def evaluate_system_capacity(
-    solar_kw: float,
-    wind_kw: float,
-    monthly_consumption_kwh: list[float],
-    monthly_solar_kwh_per_kw: list[float],
-    monthly_wind_kwh_per_kw: list[float],
-    solar_capex_per_kw: float = DEFAULT_PRICING["solar_capex_per_kw"],
-    wind_capex_per_kw: float = DEFAULT_PRICING["wind_capex_per_kw"],
-    grid_price_per_kwh: float = DEFAULT_PRICING["grid_price_per_kwh"],
-    export_price_per_kwh: float | None = DEFAULT_PRICING["export_price_per_kwh"],
-    years: float = 25.0,
-) -> dict[str, Any]:
-    """
-    Evaluate a fixed system size (solar_kw, wind_kw): costs, payback, monthly balance.
-    Same return shape as optimize_system_capacity but for one capacity pair.
-    """
-    export_price = export_price_per_kwh if export_price_per_kwh is not None else 0.0
-    capex = solar_kw * solar_capex_per_kw + wind_kw * wind_capex_per_kw
-    monthly_import = []
-    monthly_export = []
-    for m in range(12):
-        gen = solar_kw * monthly_solar_kwh_per_kw[m] + wind_kw * monthly_wind_kwh_per_kw[m]
-        demand = monthly_consumption_kwh[m]
-        monthly_import.append(max(0.0, demand - gen))
-        monthly_export.append(max(0.0, gen - demand))
-    opex_import = sum(imp * grid_price_per_kwh for imp in monthly_import)
-    opex_export = sum(exp * export_price for exp in monthly_export)
-    annual_net_opex = opex_import - opex_export
-    annual_demand_kwh = sum(monthly_consumption_kwh)
-    annual_gen_kwh = sum(solar_kw * monthly_solar_kwh_per_kw[m] + wind_kw * monthly_wind_kwh_per_kw[m] for m in range(12))
-    demand_met_pct = (annual_gen_kwh / annual_demand_kwh * 100.0) if annual_demand_kwh > 0 else 0.0
-    cost_over_years = capex + annual_net_opex * years
-    grid_only_annual_cost = annual_demand_kwh * grid_price_per_kwh
-    annual_savings = grid_only_annual_cost - annual_net_opex
-    payback_years = (capex / annual_savings) if (annual_savings > 0 and capex > 0) else None
-    monthly_balance_df = pd.DataFrame({
-        "month": MONTH_LABELS,
-        "consumption_kwh": monthly_consumption_kwh,
-        "solar_gen_kwh": [solar_kw * monthly_solar_kwh_per_kw[m] for m in range(12)],
-        "wind_gen_kwh": [wind_kw * monthly_wind_kwh_per_kw[m] for m in range(12)],
-        "grid_import_kwh": monthly_import,
-        "export_kwh": monthly_export,
-    })
-    monthly_balance_df["total_gen_kwh"] = monthly_balance_df["solar_gen_kwh"] + monthly_balance_df["wind_gen_kwh"]
-    return {
-        "optimal_solar_kw": round(solar_kw, 2),
-        "optimal_wind_kw": round(wind_kw, 2),
-        "total_capacity_kw": round(solar_kw + wind_kw, 2),
-        "capex": round(capex, 2),
-        "annual_opex_import_cost": round(opex_import, 2),
-        "annual_export_revenue": round(opex_export, 2),
-        "annual_net_opex": round(annual_net_opex, 2),
-        "years_considered": years,
-        "total_annual_cost_estimate": round(capex + annual_net_opex, 2),
-        "cost_over_years": round(cost_over_years, 2),
-        "payback_years": round(payback_years, 1) if payback_years is not None else None,
-        "annual_demand_kwh": round(annual_demand_kwh, 1),
-        "annual_generation_kwh": round(annual_gen_kwh, 1),
+        "total_capacity_kw": round(best_solar + best_wind, 2),
+        "annual_demand_kwh": round(annual_consumption_kwh, 1),
+        "annual_generation_kwh": round(best_annual_gen, 1),
+        "annual_solar_generation_kwh": round(best_annual_solar, 1),
+        "annual_wind_generation_kwh": round(best_annual_wind, 1),
+        "annual_import_kwh": round(best_annual_import, 1),
+        "annual_export_kwh": round(best_annual_export, 1),
         "demand_met_from_generation_pct": round(demand_met_pct, 1),
-        "monthly_balance": monthly_balance_df,
-        "monthly_profile_solar_kwh_per_kw": monthly_solar_kwh_per_kw,
-        "monthly_profile_wind_kwh_per_kw": monthly_wind_kwh_per_kw,
+        "capex": round(capex, 2),
+        "solar_capex": round(solar_capex, 2),
+        "wind_capex": round(wind_capex, 2),
+        "annual_net_opex": round(annual_net_opex, 2),
+        "payback_solar_years": payback_solar_years,
+        "payback_wind_years": payback_wind_years,
+        "financials_0_year": _financials(0),
+        "financials_5_year": _financials(5),
+        "financials_10_year": _financials(10),
+        "period_days": period_days,
+        "monthly_balance": monthly_balance,
     }
 
 
 def get_optimised_system(
     latitude: float,
     longitude: float,
-    monthly_consumption_kwh: list[float] | None = None,
-    annual_consumption_kwh: float | None = None,
-    monthly_fraction: list[float] | None = None,
+    annual_consumption_kwh: float,
+    solar_type_params: dict[str, Any],
+    wind_type_params: dict[str, Any],
     pricing: dict[str, float] | None = None,
-    solar_tier: str = "mid",
-    wind_tier: str = "mid",
     solar_max_kw: float = 20.0,
     wind_max_kw: float = 10.0,
     step_kw: float = 0.5,
-    min_demand_met_from_gen_pct: float = 0.0,
-    years: float = 25.0,
-    fixed_solar_kw: float | None = None,
-    fixed_wind_kw: float | None = None,
-    insulation_r_value: float = 0.0,
-    heating_fraction: float = 0.6,
+    optimize_over_years: float = 5.0,
     start_date: str | None = None,
     end_date: str | None = None,
+    flux_source: Literal["forecast", "last_year_monthly"] = "last_year_monthly",
+    min_demand_met_from_gen_pct: float = 50.0,
+    min_solar_kw: float = 0.0,
+    min_wind_kw: float = 0.5,
 ) -> dict[str, Any]:
     """
-    Optimise system capacity and cost to meet user energy demand over `years`, or evaluate a fixed size.
-    Capacity: optimiser search (solar_max_kw, wind_max_kw, step_kw) or fixed_solar_kw/fixed_wind_kw.
-    insulation_r_value: R-value in m²·K/W (0 = none; typical 1–6; reduces heating share of demand).
-    heating_fraction: share of demand that is space heating (default 0.6); insulation applies to this share.
+    Size and price a solar and wind system for a location and annual demand.
+    Flux can be from a short forecast (daily, then annualised) or from last year's
+    monthly historical data (12 months, no scaling).
+
+    Inputs:
+        latitude, longitude: location
+        annual_consumption_kwh: annual energy demand (kWh)
+        solar_type_params, wind_type_params: from src.data.energy_tiers (e.g. SOLAR_TIERS["budget"])
+        pricing: optional override for solar_capex_per_kw, wind_capex_per_kw, grid_price_per_kwh, export_price_per_kwh
+        solar_max_kw, wind_max_kw, step_kw: search range for optimisation
+        optimize_over_years: minimise total cost over this many years (e.g. 5)
+        start_date, end_date: used only when flux_source='forecast' (default: next 7 days)
+        flux_source: 'last_year_monthly' = use Historical API last year aggregated by month (default);
+                     'forecast' = use short daily forecast and annualise
+        min_demand_met_from_gen_pct: require at least this % of demand from solar/wind (default 50);
+             set to 0 to allow 0 kW (grid-only) if cheapest.
+        min_solar_kw, min_wind_kw: only consider solutions with at least this much solar/wind (default min_wind_kw=0.5).
+
+    Returns:
+        Dict with optimal_solar_kw, optimal_wind_kw, annual_demand_kwh, annual_generation_kwh,
+        financials_0_year, financials_5_year, financials_10_year, flux_source, flux_period_days.
     """
-    flux_df = get_flux(latitude, longitude, start_date, end_date)
-    profiles = get_monthly_profiles(flux_df, latitude, longitude, solar_tier=solar_tier, wind_tier=wind_tier)
-    consumption_raw = _monthly_consumption_from_input(
-        monthly_consumption_kwh=monthly_consumption_kwh,
-        annual_consumption_kwh=annual_consumption_kwh,
-        monthly_fraction=monthly_fraction,
-    )
-    consumption = _apply_insulation(consumption_raw, insulation_r_value=insulation_r_value, heating_fraction=heating_fraction)
-    pr = {**DEFAULT_PRICING, **(pricing or {})}
-    if fixed_solar_kw is not None and fixed_wind_kw is not None:
-        result = evaluate_system_capacity(
-            fixed_solar_kw,
-            fixed_wind_kw,
-            consumption,
-            profiles["solar_kwh_per_kw"],
-            profiles["wind_kwh_per_kw"],
-            solar_capex_per_kw=pr["solar_capex_per_kw"],
-            wind_capex_per_kw=pr["wind_capex_per_kw"],
-            grid_price_per_kwh=pr["grid_price_per_kwh"],
-            export_price_per_kwh=pr.get("export_price_per_kwh"),
-            years=years,
-        )
+    if flux_source == "last_year_monthly":
+        flux = get_flux_monthly_last_year(latitude, longitude)
+        flux_frequency = "monthly"
     else:
-        result = optimize_system_capacity(
-            monthly_consumption_kwh=consumption,
-            monthly_solar_kwh_per_kw=profiles["solar_kwh_per_kw"],
-            monthly_wind_kwh_per_kw=profiles["wind_kwh_per_kw"],
-            solar_capex_per_kw=pr["solar_capex_per_kw"],
-            wind_capex_per_kw=pr["wind_capex_per_kw"],
-            grid_price_per_kwh=pr["grid_price_per_kwh"],
-            export_price_per_kwh=pr.get("export_price_per_kwh"),
-            solar_max_kw=solar_max_kw,
-            wind_max_kw=wind_max_kw,
-            step_kw=step_kw,
-            min_demand_met_from_gen_pct=min_demand_met_from_gen_pct,
-            years=years,
-        )
-    annual_demand_before_insulation = sum(consumption_raw)
-    annual_demand_after_insulation = sum(consumption)
-    return {
-        "monthly_profiles": profiles["monthly_profile"],
-        "annual_solar_per_kw": profiles["annual_solar_per_kw"],
-        "annual_wind_per_kw": profiles["annual_wind_per_kw"],
-        "optimisation": result,
-        "consumption_monthly_kwh": consumption,
-        "consumption_before_insulation_monthly_kwh": consumption_raw,
-        "annual_demand_before_insulation_kwh": round(annual_demand_before_insulation, 1),
-        "annual_demand_after_insulation_kwh": round(annual_demand_after_insulation, 1),
-        "insulation_r_value": insulation_r_value,
-        "heating_fraction": heating_fraction,
-    }
+        flux = get_flux_daily(latitude, longitude, start_date, end_date)
+        flux_frequency = "daily"
+    pr = {**DEFAULT_PRICING, **(pricing or {})}
+    result = optimize_system_capacity(
+        flux,
+        annual_consumption_kwh,
+        solar_type_params,
+        wind_type_params,
+        solar_capex_per_kw=pr["solar_capex_per_kw"],
+        wind_capex_per_kw=pr["wind_capex_per_kw"],
+        grid_price_per_kwh=pr["grid_price_per_kwh"],
+        export_price_per_kwh=pr["export_price_per_kwh"],
+        solar_max_kw=solar_max_kw,
+        wind_max_kw=wind_max_kw,
+        step_kw=step_kw,
+        optimize_over_years=optimize_over_years,
+        flux_frequency=flux_frequency,
+        min_demand_met_from_gen_pct=min_demand_met_from_gen_pct,
+        min_solar_kw=min_solar_kw,
+        min_wind_kw=min_wind_kw,
+    )
+    result["flux_source"] = flux_source
+    result["flux_period_days"] = result.pop("period_days")
+    return result

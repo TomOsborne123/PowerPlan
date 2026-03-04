@@ -1,22 +1,30 @@
+from datetime import date
+
 import openmeteo_requests
 import pandas as pd
 import requests_cache
 from retry_requests import retry
 
-def get_weather(latitude, longitude, start_date, end_date, variables, frequency):
+# Forecast API (next ~16 days); use_archive=True uses Historical Weather API (past data).
+FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
+ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
+
+
+def get_weather(latitude, longitude, start_date, end_date, variables, frequency, use_archive=False):
     """
-    Fetch hourly weather data from Open-Meteo.
+    Fetch weather data from Open-Meteo (forecast or historical archive).
 
     Args:
         latitude (float)
         longitude (float)
-        start_date (str)
-        end_date (str)
-        variables (list of str): List of hourly variables to fetch.
-        frequency (str): Daily or hourly.
+        start_date (str): ISO date yyyy-mm-dd
+        end_date (str): ISO date yyyy-mm-dd
+        variables (list of str): Hourly or daily variables to fetch (see allowed sets below).
+        frequency (str): 'hourly' or 'daily'.
+        use_archive (bool): If True, use Historical Weather API (past dates). If False, use Forecast API.
 
     Returns:
-        pd.DataFrame: Hourly or Daily weather data.
+        pd.DataFrame: Hourly or daily weather data.
     """
 
     variables_allowed_hourly = {
@@ -83,21 +91,20 @@ def get_weather(latitude, longitude, start_date, end_date, variables, frequency)
         raise ValueError(f"Invalid variables requested for {frequency}: {invalid_vars}. "
                          f"Allowed: {sorted(variables_allowed)}")
 
-    # Set up the Open-Meteo API client with cache and retry on error
-    cache_session = requests_cache.CachedSession('.cache', expire_after = 3600)
-    retry_session = retry(cache_session, retries = 5, backoff_factor = 0.2)
-    openmeteo = openmeteo_requests.Client(session = retry_session)
+    cache_session = requests_cache.CachedSession('.cache', expire_after=3600)
+    retry_session = retry(cache_session, retries=5, backoff_factor=0.2)
+    openmeteo = openmeteo_requests.Client(session=retry_session)
 
-    # Make sure all required weather variables are listed here
-    url = "https://api.open-meteo.com/v1/forecast"
+    url = ARCHIVE_URL if use_archive else FORECAST_URL
     params = {
         "latitude": latitude,
         "longitude": longitude,
-        "models": "ukmo_seamless",
         "wind_speed_unit": "ms",
         "start_date": start_date,
         "end_date": end_date,
     }
+    if not use_archive:
+        params["models"] = "ukmo_seamless"
     if frequency == "hourly":
         params["hourly"] = variables
     else:
@@ -119,6 +126,83 @@ def get_weather(latitude, longitude, start_date, end_date, variables, frequency)
     for i, var in enumerate(variables):
         data[var] = response.Variables(i).ValuesAsNumpy()
 
-    dataframe = pd.DataFrame(data = data)
-
+    dataframe = pd.DataFrame(data=data)
     return dataframe
+
+
+# Default daily variables for last-year monthly aggregation (radiation sum, wind, temp, precipitation).
+DEFAULT_LAST_YEAR_DAILY_VARIABLES = [
+    "shortwave_radiation_sum",
+    "wind_speed_10m_max",
+    "temperature_2m_max",
+    "temperature_2m_min",
+    "precipitation_sum",
+]
+
+# Variables that are summed over the month (daily values are summed); all others are averaged.
+DAILY_SUM_VARIABLES = {
+    "shortwave_radiation_sum",
+    "rain_sum",
+    "showers_sum",
+    "snowfall_sum",
+    "precipitation_sum",
+    "et0_fao_evapotranspiration",
+    "sunshine_duration",
+    "daylight_duration",
+}
+
+
+def get_weather_last_year_monthly(latitude, longitude, variables=None):
+    """
+    Fetch last calendar year's weather at daily resolution from the Historical API,
+    then aggregate to one row per month (12 rows).
+
+    Args:
+        latitude (float)
+        longitude (float)
+        variables (list of str, optional): Daily variable names. Defaults to
+            shortwave_radiation_sum, wind_speed_10m_max, temperature_2m_max,
+            temperature_2m_min, precipitation_sum.
+
+    Returns:
+        pd.DataFrame: 12 rows (Jan–Dec), index = month number (1–12), columns = aggregated
+        variables. Sum-type variables (e.g. shortwave_radiation_sum) are monthly totals;
+        others (e.g. temperature, wind_speed_10m_max) are monthly means.
+    """
+    last_year = date.today().year - 1
+    start_date = f"{last_year}-01-01"
+    end_date = f"{last_year}-12-31"
+    vars_to_use = variables or DEFAULT_LAST_YEAR_DAILY_VARIABLES
+    # Restrict to allowed daily variables
+    variables_allowed_daily = {
+        "temperature_2m_max", "temperature_2m_min", "weather_code",
+        "apparent_temperature_min", "apparent_temperature_max",
+        "wind_speed_10m_max", "wind_gusts_10m_max", "wind_direction_10m_dominant",
+        "shortwave_radiation_sum", "et0_fao_evapotranspiration",
+        "sunshine_duration", "daylight_duration", "sunset", "sunrise",
+        "rain_sum", "showers_sum", "snowfall_sum", "precipitation_sum",
+        "precipitation_hours", "precipitation_probability_max",
+    }
+    vars_to_use = [v for v in vars_to_use if v in variables_allowed_daily]
+    if not vars_to_use:
+        vars_to_use = list(DEFAULT_LAST_YEAR_DAILY_VARIABLES)
+
+    df = get_weather(
+        latitude, longitude,
+        start_date, end_date,
+        vars_to_use,
+        frequency="daily",
+        use_archive=True,
+    )
+    df["date"] = pd.to_datetime(df["date"], utc=True)
+    df["month"] = df["date"].dt.month
+
+    agg = {}
+    for v in vars_to_use:
+        if v in DAILY_SUM_VARIABLES:
+            agg[v] = "sum"
+        else:
+            agg[v] = "mean"
+    monthly = df.groupby("month", as_index=True).agg(agg)
+    monthly.index.name = "month"
+    return monthly

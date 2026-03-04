@@ -5,7 +5,7 @@ A Home Energy System Planning Tool. PowerPlan uses weather data and tariff infor
 ## Features
 
 - **Weather and flux data** — Fetch hourly or daily weather (temperature, wind, solar irradiance) for any latitude/longitude via the Open-Meteo API.
-- **Energy balancing model** — From coordinates, derive solar (GHI/DNI/DHI) and wind flux, then run them through solar (pvlib) and wind (power-curve) models for several technology tiers (budget, mid, premium). Returns options for energy generation at different price points (annual kWh, capacity factor, cost band).
+- **Energy balancing model** — Inputs: latitude, longitude, solar and wind **capacity** (kW), and generation-type params (e.g. budget/mid/premium from `src.data.energy_tiers`). Uses daily weather (GHI sum, wind speed) from the API; returns daily solar and wind generation with no month scaling.
 - **Tariff scraping** — Scrape energy tariff and comparison data (e.g. supplier, unit rate, standing charge, green/renewable flags) with location (postcode, lat/lon) and store in a MySQL-backed tariff database.
 
 ## Requirements
@@ -23,12 +23,6 @@ pip install -e .
 
 After this, `from src...` imports work from any working directory. If you don’t install the package, run scripts and the notebook **from the project root** (the `PowerPlan` directory) so that `src` is found.
 
-For the energy balancing model (solar PV output), install the solar library:
-
-```bash
-pip install pvlib
-```
-
 ## Project structure
 
 ```
@@ -44,11 +38,12 @@ PowerPlan/
 │   │       ├── Tariff.py           # Tariff dataclass and DB access
 │   │       └── testScrape.py       # Scrape tests
 │   ├── data/
+│   │   ├── energy_tiers.py        # Solar/wind type definitions (budget, mid, premium)
 │   │   ├── create_energy_tariff_database.py
 │   │   └── create_energy_tariff_database_simple.py   # MySQL schema for tariffs
 │   └── models/
-│       ├── energy_balancing.py     # get_flux, get_energy_options, solar/wind tiers
-│       ├── energyBalancing.ipynb   # Notebook: lat/lon → energy options
+│       ├── energy_balancing.py     # get_flux_daily, get_generation (daily, no scaling)
+│       ├── energyBalancing.ipynb   # Notebook: location + capacity + types → daily generation
 │       └── economicBalancing.ipynb
 ├── scripts/
 │   └── fetch_weather.py           # Example: fetch weather for a location
@@ -57,20 +52,25 @@ PowerPlan/
 
 ## Quick start
 
-**Energy options from latitude and longitude**
+**Daily generation from location and capacity**
 
 1. Open `src/models/energyBalancing.ipynb`.
-2. Set `latitude` and `longitude` (e.g. Bristol: 51.4552, -2.5966).
-3. Run the cells. The first cell calls `get_energy_options(latitude, longitude)` and shows a table of solar and wind options (by tier) with annual energy (kWh), cost band, and capacity factor.
+2. Set `latitude`, `longitude`, `solar_capacity_kw`, `wind_capacity_kw`, and generation types (e.g. `SOLAR_TIERS["budget"]`, `WIND_TIERS["budget"]` from `src.data.energy_tiers`).
+3. Run the cells to get a daily table of solar and wind generation (no month scaling; data comes from the weather API).
 
 From code:
 
 ```python
-from src.models.energy_balancing import get_energy_options, get_flux
+from src.models.energy_balancing import get_generation, get_flux_daily
+from src.data.energy_tiers import SOLAR_TIERS, WIND_TIERS
 
-options = get_energy_options(latitude=51.4552, longitude=-2.5966)
-# Optional: pass start_date, end_date (default: next 7 days forecast)
-# options = get_energy_options(51.4552, -2.5966, "2026-02-20", "2026-02-26")
+daily = get_generation(
+    51.4552, -2.5966,           # latitude, longitude
+    4.0, 2.0,                   # solar_capacity_kw, wind_capacity_kw
+    SOLAR_TIERS["budget"],      # solar type params (stored in energy_tiers)
+    WIND_TIERS["budget"],       # wind type params
+)
+# daily has columns: ghi_j_per_m2, wind_speed_10m_max, solar_gen_kwh, wind_gen_kwh, total_gen_kwh
 ```
 
 **Weather only**
