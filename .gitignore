@@ -1,3 +1,35 @@
-.cache.dqlite
-.cache/
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
 *.egg-info/
+*.egg
+build/
+dist/
+.eggs/
+
+# Virtual envs
+.env
+.venv/
+venv/
+env/
+
+# Cache and local DBs
+.cache/
+*.sqlite
+.cache.sqlite
+
+# Scrape / Playwright debug output (written to output/scrape_debug/ or cwd)
+results_page.html
+step4_*.png
+step4_*.html
+scraped_page.html
+output/
+
+# IDE
+.idea/
+
+# Frontend (in addition to frontend/.gitignore)
+node_modules/

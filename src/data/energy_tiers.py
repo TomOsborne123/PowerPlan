@@ -1,11 +1,13 @@
 """
 Solar and wind generation type definitions (budget, mid, premium).
-Store and pass these into the energy balancing model as solar_type_params / wind_type_params.
+Heat pump tiers (COP). Store and pass into the energy balancing model.
 """
 
 from __future__ import annotations
 
 from typing import Any
+
+__all__ = ["SOLAR_TIERS", "WIND_TIERS", "HEAT_PUMP_TIERS"]
 
 # Solar: per-kWp parameters for daily GHI-to-energy conversion
 SOLAR_TIERS: dict[str, dict[str, Any]] = {
@@ -50,6 +52,23 @@ WIND_TIERS: dict[str, dict[str, Any]] = {
         "v_rated": 10.0,
         "v_cut_out": 25.0,
         "power_exponent": 2.5,
+        "cost_band": "high",
+    },
+}
+
+# Heat pumps: COP (coefficient of performance). Electricity for heating = heat_demand / COP.
+# "none" = electric heating (COP 1). Pass as heat_pump_params to energy balancing.
+HEAT_PUMP_TIERS: dict[str, dict[str, Any]] = {
+    "none": {
+        "cop": 1.0,
+        "cost_band": "n/a",
+    },
+    "standard": {
+        "cop": 2.5,
+        "cost_band": "medium",
+    },
+    "efficient": {
+        "cop": 3.5,
         "cost_band": "high",
     },
 }

@@ -7,6 +7,7 @@ A Home Energy System Planning Tool. PowerPlan uses weather data and tariff infor
 - **Weather and flux data** — Fetch hourly or daily weather (temperature, wind, solar irradiance) for any latitude/longitude via the Open-Meteo API.
 - **Energy balancing model** — Inputs: latitude, longitude, solar and wind **capacity** (kW), and generation-type params (e.g. budget/mid/premium from `src.data.energy_tiers`). Uses daily weather (GHI sum, wind speed) from the API; returns daily solar and wind generation with no month scaling.
 - **Tariff scraping** — Scrape energy tariff and comparison data (e.g. supplier, unit rate, standing charge, green/renewable flags) with location (postcode, lat/lon) and store in a MySQL-backed tariff database.
+- **Web app** — Enter location (UK postcode or lat/lon), annual usage, demand options (heating fraction, insulation, heat pump), and tariffs; get recommended solar/wind sizing and best tariff.
 
 ## Requirements
 
@@ -29,25 +30,43 @@ After this, `from src...` imports work from any working directory. If you don’
 PowerPlan/
 ├── pyproject.toml
 ├── README.md
+├── .gitignore
 ├── src/
 │   ├── api/
-│   │   ├── get_weather.py          # Open-Meteo hourly/daily weather (solar, wind, temp)
+│   │   ├── get_weather.py           # Open-Meteo hourly/daily weather (solar, wind, temp)
+│   │   ├── postcode_lookup.py       # UK postcode → lat/lon (postcodes.io)
 │   │   └── energyScraping/
-│   │       ├── ScrapeTariff.py     # Tariff scraping workflow
-│   │       ├── ScrapeSequence.py   # Scrape sequencing
-│   │       ├── Tariff.py           # Tariff dataclass and DB access
-│   │       └── testScrape.py       # Scrape tests
+│   │       ├── ScrapeTariff.py     # Tariff scraping (Camoufox/Playwright)
+│   │       ├── ScrapeSequence.py   # CLI scrape flow
+│   │       ├── Tariff.py           # Tariff dataclass and DB save
+│   │       ├── recommend_from_scrape.py
+│   │       └── testScrape.py       # Selenium scrape test
 │   ├── data/
-│   │   ├── energy_tiers.py        # Solar/wind type definitions (budget, mid, premium)
+│   │   ├── energy_tiers.py
 │   │   ├── create_energy_tariff_database.py
-│   │   └── create_energy_tariff_database_simple.py   # MySQL schema for tariffs
-│   └── models/
-│       ├── energy_balancing.py     # get_flux_daily, get_generation (daily, no scaling)
-│       ├── energyBalancing.ipynb   # Notebook: location + capacity + types → daily generation
-│       └── economicBalancing.ipynb
+│   │   └── create_energy_tariff_database_simple.py
+│   ├── models/
+│   │   ├── energy_balancing.py
+│   │   ├── tariff_recommendation.py
+│   │   ├── energyBalancing.ipynb
+│   │   └── economicBalancing.ipynb
+│   └── web/
+│       ├── app.py                  # Flask app: API + serves React build
+│       ├── run_scrape.py           # CLI for scrape (used by app in subprocess)
+│       └── static/                 # React build output (npm run build)
+├── frontend/                       # React (Vite) source
+│   ├── index.html
+│   ├── package.json
+│   ├── vite.config.js
+│   └── src/
+│       ├── main.jsx
+│       ├── App.jsx
+│       ├── ResultView.jsx
+│       ├── api.js
+│       └── index.css
 ├── scripts/
-│   └── fetch_weather.py           # Example: fetch weather for a location
-└── results_page.html              # Scraped comparison page (example output)
+│   └── fetch_weather.py
+└── output/                         # Ignored; scrape debug (HTML, screenshots) → output/scrape_debug/
 ```
 
 ## Quick start
@@ -94,6 +113,46 @@ Or run the example script (from the project root):
 cd PowerPlan
 python scripts/fetch_weather.py
 ```
+
+**Web app (recommended technologies + tariff)**
+
+The web UI is a **React** app (Vite). You can either run the React dev server (with API proxy to Flask) or build once and let Flask serve the built files.
+
+**Option A — Development (React dev server + Flask API)**
+
+Terminal 1 (Flask API):
+
+```bash
+cd PowerPlan
+pip install -e .
+python -m src.web.app
+```
+
+Terminal 2 (React dev server; proxies /api to Flask on port 5001):
+
+```bash
+cd PowerPlan/frontend
+npm install
+npm run dev
+```
+
+Then open http://127.0.0.1:5173 (Vite). API calls go to the Flask backend.
+
+**Option B — Production-style (Flask serves built React app)**
+
+Build the frontend once, then run Flask:
+
+```bash
+cd PowerPlan/frontend
+npm install
+npm run build
+cd ..
+python -m src.web.app
+```
+
+Then open http://127.0.0.1:5001. The build output is written to `src/web/static/`.
+
+On the page: enter a UK postcode (or latitude/longitude), annual electricity use, optional demand adjustments (heating fraction, insulation, heat pump COP), and tariff options (supplier, unit rate p/kWh, standing charge p/day). Click **Get recommendation** to see optimal solar/wind capacity and the best tariff.
 
 **If you see `ModuleNotFoundError: No module named 'src'`**
 

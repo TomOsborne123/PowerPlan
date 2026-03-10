@@ -2,11 +2,15 @@
 Simple tariff scraper using Selenium (real browser)
 """
 
+from pathlib import Path
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 from bs4 import BeautifulSoup
 import time
+
+# Debug output dir (same as ScrapeTariff)
+_DEBUG_DIR = Path(__file__).resolve().parents[3] / "output" / "scrape_debug"
 
 # URL to scrape
 url = "https://www.moneysupermarket.com/gas-and-electricity/"
@@ -34,9 +38,11 @@ try:
     soup = BeautifulSoup(html, 'lxml')
 
     # Save to file
-    with open('scraped_page.html', 'w', encoding='utf-8') as f:
+    _DEBUG_DIR.mkdir(parents=True, exist_ok=True)
+    out = _DEBUG_DIR / 'scraped_page.html'
+    with open(out, 'w', encoding='utf-8') as f:
         f.write(soup.prettify())
-    print("💾 Saved HTML to 'scraped_page.html'")
+    print(f"💾 Saved HTML to '{out}'")
 
     # Try to find some data
     print("\n--- Sample data from page ---")
@@ -63,4 +69,4 @@ except Exception as e:
     if 'driver' in locals():
         driver.quit()
 
-print("\n✅ Script finished - check scraped_page.html")
+print("\n✅ Script finished - check output/scrape_debug/scraped_page.html")

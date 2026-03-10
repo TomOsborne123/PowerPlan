@@ -6,7 +6,10 @@ Updated to use Camoufox
 
 from camoufox.sync_api import Camoufox
 from bs4 import BeautifulSoup
-from Tariff import Tariff
+try:
+    from .Tariff import Tariff
+except ImportError:
+    from Tariff import Tariff
 import time
 from datetime import datetime
 import re
@@ -14,6 +17,20 @@ from typing import List
 import re
 import requests
 from typing import Dict, Optional
+from pathlib import Path
+
+# Debug output for scrape (HTML, screenshots) – keeps repo root clean
+_DEBUG_DIR = Path(__file__).resolve().parents[3] / "output" / "scrape_debug"
+
+
+def _debug_path(name: str) -> str:
+    """Return path for debug file. Creates output dir if possible; else falls back to cwd so scrape never fails on debug write."""
+    try:
+        _DEBUG_DIR.mkdir(parents=True, exist_ok=True)
+        return str(_DEBUG_DIR / name)
+    except Exception:
+        return name
+
 
 class PostcodeLookup:
     """Lookup location data from UK postcodes"""
@@ -248,7 +265,8 @@ class ScrapeTariff:
                fuel_type: str = 'both',
                current_supplier: str = '',
                pay_method: str = 'monthly_direct_debit',
-               has_ev: str = 'No') -> List[Tariff]:
+               has_ev: str = 'No',
+               headless: bool = False) -> List[Tariff]:
 
         url = "https://www.moneysupermarket.com/gas-and-electricity/"
 
@@ -278,7 +296,7 @@ class ScrapeTariff:
             # Use Camoufox with humanized settings
             print("Launching Camoufox browser...")
             with Camoufox(
-                    headless=False,
+                    headless=headless,
                     humanize=False,  # Try disabling humanize
             ) as browser:
                 self.browser = browser
@@ -347,10 +365,13 @@ class ScrapeTariff:
                 html = self.page.content()
                 self.soup = BeautifulSoup(html, 'lxml')
 
-                # Save for debugging
-                with open('results_page.html', 'w', encoding='utf-8') as f:
-                    f.write(self.soup.prettify())
-                print("💾 Saved results to 'results_page.html'")
+                # Save for debugging (non-fatal: if this fails, we still extract from self.soup)
+                try:
+                    with open(_debug_path('results_page.html'), 'w', encoding='utf-8') as f:
+                        f.write(self.soup.prettify())
+                    print("💾 Saved results to 'output/scrape_debug/results_page.html'")
+                except Exception as save_err:
+                    print(f"⚠ Could not save debug HTML: {save_err}")
 
                 # Extract tariff data for all result cards
                 self.tariff = self._extract_tariff_data()
@@ -367,8 +388,8 @@ class ScrapeTariff:
         except Exception as e:
             print(f"❌ Error: {e}")
             if self.page:
-                self.page.screenshot(path='error_screenshot.png')
-                with open('error_page.html', 'w', encoding='utf-8') as f:
+                self.page.screenshot(path=_debug_path('error_screenshot.png'))
+                with open(_debug_path('error_page.html'), 'w', encoding='utf-8') as f:
                     f.write(self.page.content())
                 print("📸 Saved error screenshot and HTML")
             raise
@@ -477,11 +498,11 @@ class ScrapeTariff:
             if not quote_started:
                 print("\n✗ Failed to find 'Start a quote' button")
                 print("Taking screenshot for debugging...")
-                self.page.screenshot(path="debug_no_start_button.png")
+                self.page.screenshot(path=_debug_path("debug_no_start_button.png"))
 
                 # Also save the full HTML
                 html_content = self.page.content()
-                with open("debug_page_content.html", "w", encoding="utf-8") as f:
+                with open(_debug_path("debug_page_content.html"), "w", encoding="utf-8") as f:
                     f.write(html_content)
                 print("✓ Saved debug_no_start_button.png and debug_page_content.html")
 
@@ -542,7 +563,7 @@ class ScrapeTariff:
 
             if not email_entered:
                 print("✗ Failed to find email input field")
-                self.page.screenshot(path="debug_no_email_field.png")
+                self.page.screenshot(path=_debug_path("debug_no_email_field.png"))
                 raise Exception("Could not locate email input field")
 
             # Now click submit/continue button
@@ -583,7 +604,7 @@ class ScrapeTariff:
                     time.sleep(3)
                 except:
                     print("✗ Failed to submit form")
-                    self.page.screenshot(path="debug_no_submit.png")
+                    self.page.screenshot(path=_debug_path("debug_no_submit.png"))
 
             print(f"✓ Step 1 complete - email entered: {random_email}")
 
@@ -641,10 +662,10 @@ class ScrapeTariff:
                 except:
                     print("⚠ Could not submit - trying to continue anyway")
 
-            # Wait for address dropdown to appear
-            time.sleep(3)
+            # Wait for address dropdown or list to appear (site may use select or custom widget)
+            time.sleep(5)
 
-            # Select address from dropdown - try multiple selectors
+            # Select address - try <select> first, then custom dropdowns (role="listbox", etc.)
             address_selected = False
             dropdown_selectors = [
                 "#address",
@@ -666,6 +687,8 @@ class ScrapeTariff:
 
                         # Get available addresses
                         options = address_dropdown.locator("option").all()
+                        if not options:
+                            continue
                         print(f"✓ Found {len(options)} address options:")
 
                         # Display first few options
@@ -674,7 +697,7 @@ class ScrapeTariff:
                             print(f"  {i}: {text[:60]}")
 
                         # Check if first option is placeholder
-                        first_option_text = options[0].text_content().lower()
+                        first_option_text = (options[0].text_content() or "").lower()
                         is_placeholder = any(word in first_option_text for word in ['select', 'choose', 'please', '--'])
 
                         if is_placeholder:
@@ -706,10 +729,34 @@ class ScrapeTariff:
                     print(f"  Failed with {selector}: {type(e).__name__}")
                     continue
 
+            # If no <select> found, try custom address list (e.g. role="listbox" / role="option")
+            if not address_selected:
+                for list_selector in [
+                    '[role="listbox"] [role="option"]',
+                    '[role="listbox"] li',
+                    '[data-testid*="address"]',
+                    '.address-list li',
+                    '[class*="address"] [class*="option"]',
+                    'ul[class*="address"] li',
+                ]:
+                    try:
+                        opts = self.page.locator(list_selector).all()
+                        if len(opts) > address_index:
+                            print(f"✓ Found address list using: {list_selector} ({len(opts)} items)")
+                            opts[address_index].scroll_into_view_if_needed()
+                            time.sleep(0.3)
+                            opts[address_index].click()
+                            address_selected = True
+                            time.sleep(1)
+                            break
+                    except Exception as e:
+                        print(f"  List selector {list_selector}: {type(e).__name__}")
+                        continue
+
             if not address_selected:
                 print("✗ Failed to select address")
-                self.page.screenshot(path='step2_address_error.png')
-                with open("step2_address_page.html", "w", encoding="utf-8") as f:
+                self.page.screenshot(path=_debug_path('step2_address_error.png'))
+                with open(_debug_path("step2_address_page.html"), "w", encoding="utf-8") as f:
                     f.write(self.page.content())
                 print("Saved debug files: step2_address_error.png and step2_address_page.html")
                 raise Exception("Could not select address from dropdown")
@@ -746,7 +793,7 @@ class ScrapeTariff:
 
         except Exception as e:
             print(f"✗ Error in Step 2: {e}")
-            self.page.screenshot(path='step2_error.png')
+            self.page.screenshot(path=_debug_path('step2_error.png'))
             raise
 
     def _step3_home_or_business(self):
@@ -850,8 +897,8 @@ class ScrapeTariff:
 
             if not fuel_selected:
                 print("✗ Failed to find fuel type selection")
-                self.page.screenshot(path='step4_fuel_type_error.png')
-                with open("step4_fuel_page.html", "w", encoding="utf-8") as f:
+                self.page.screenshot(path=_debug_path('step4_fuel_type_error.png'))
+                with open(_debug_path("step4_fuel_page.html"), "w", encoding="utf-8") as f:
                     f.write(self.page.content())
                 print("Saved debug files: step4_fuel_type_error.png and step4_fuel_page.html")
                 raise Exception(f"Could not find fuel type option for: {fuel_type}")
@@ -882,7 +929,7 @@ class ScrapeTariff:
 
         except Exception as e:
             print(f"✗ Error in Step 4: {str(e)}")
-            self.page.screenshot(path='step4_error.png')
+            self.page.screenshot(path=_debug_path('step4_error.png'))
             raise
 
     def _step5_select_ev(self, has_ev: str):
@@ -972,7 +1019,7 @@ class ScrapeTariff:
 
             if not ev_selected:
                 print("⚠ Failed to find EV selection - may be optional")
-                self.page.screenshot(path='step5_ev_error.png')
+                self.page.screenshot(path=_debug_path('step5_ev_error.png'))
                 # Don't raise error - EV question might be optional
                 print("⚠ Continuing without EV selection")
                 return

@@ -17,6 +17,7 @@ __all__ = [
     "get_generation",
     "get_optimised_system",
     "optimize_system_capacity",
+    "demand_after_insulation_and_heat_pump",
     "DEFAULT_PRICING",
 ]
 
@@ -28,11 +29,57 @@ DEFAULT_PRICING = {
     "export_price_per_kwh": 0.05,
 }
 
+# Insulation: R-value (m²·K/W). Heating demand is reduced by _insulation_reduction(r_value).
+# Typical UK: uninsulated wall ~2, well insulated ~5. Scale chosen so e.g. R=5 → ~40% heating reduction.
+INSULATION_R_VALUE_SCALE = 12.0  # R-value at which heating reduction reaches cap
+INSULATION_MAX_REDUCTION = 0.5   # cap heating demand reduction at 50%
+
 
 def _default_dates() -> tuple[str, str]:
-    start = datetime.utcnow().date()
-    end = start + timedelta(days=6)
+    """Default to last 7 days (past) so flux data is non-null; forecast API often returns null for future days."""
+    end = datetime.utcnow().date()
+    start = end - timedelta(days=6)
     return start.isoformat(), end.isoformat()
+
+
+def _insulation_reduction(r_value: float) -> float:
+    """
+    Fraction of space-heating demand saved by insulation (0 = none, up to INSULATION_MAX_REDUCTION).
+    r_value: insulation R-value in m²·K/W (0 = no extra insulation).
+    """
+    if r_value <= 0:
+        return 0.0
+    return min(INSULATION_MAX_REDUCTION, r_value / INSULATION_R_VALUE_SCALE)
+
+
+def demand_after_insulation_and_heat_pump(
+    annual_consumption_kwh: float,
+    heating_fraction: float,
+    insulation_r_value: float = 0.0,
+    heat_pump_cop: float = 1.0,
+) -> dict[str, float]:
+    """
+    Adjust annual demand for insulation (reduces heating demand) and heat pump (reduces electricity for heating).
+
+    heating_fraction: share of annual_consumption that is space heating (0–1).
+    insulation_r_value: m²·K/W; 0 = no extra insulation.
+    heat_pump_cop: coefficient of performance; 1.0 = electric heating, 2.5–3.5 typical for ASHP.
+
+    Returns dict with: annual_demand_before_kwh, heating_demand_after_insulation_kwh,
+    electricity_demand_for_optimisation_kwh (final demand used for sizing solar/wind).
+    """
+    non_heating = annual_consumption_kwh * (1.0 - heating_fraction)
+    heating_raw = annual_consumption_kwh * heating_fraction
+    reduction = _insulation_reduction(insulation_r_value)
+    heating_after_insulation = heating_raw * (1.0 - reduction)
+    cop = max(1.0, float(heat_pump_cop))
+    electricity_for_heating = heating_after_insulation / cop
+    demand_for_optimisation = non_heating + electricity_for_heating
+    return {
+        "annual_demand_before_kwh": annual_consumption_kwh,
+        "heating_demand_after_insulation_kwh": heating_after_insulation,
+        "electricity_demand_for_optimisation_kwh": demand_for_optimisation,
+    }
 
 
 def _wind_power_curve(
@@ -55,9 +102,11 @@ def get_flux_daily(
     lon: float,
     start_date: str | None = None,
     end_date: str | None = None,
+    use_archive: bool = True,
 ) -> pd.DataFrame:
     """
     Fetch daily solar and wind flux for a location from the weather API.
+    Defaults to the last 7 days (past) and uses the Historical API so data is non-null.
     Returns DataFrame with date index and columns: ghi_mj_per_m2, wind_speed_10m_max.
     """
     from src.api.get_weather import get_weather
@@ -75,6 +124,7 @@ def get_flux_daily(
         end_date=end_date,
         variables=variables,
         frequency="daily",
+        use_archive=use_archive,
     )
     # Open-Meteo daily shortwave_radiation_sum is in MJ/m² (megajoules per m²)
     df = df.rename(columns={"shortwave_radiation_sum": "ghi_mj_per_m2"})
@@ -461,15 +511,19 @@ def get_optimised_system(
     min_demand_met_from_gen_pct: float = 50.0,
     min_solar_kw: float = 0.0,
     min_wind_kw: float = 0.5,
+    heating_fraction: float = 0.6,
+    insulation_r_value: float = 0.0,
+    heat_pump_cop: float = 1.0,
 ) -> dict[str, Any]:
     """
     Size and price a solar and wind system for a location and annual demand.
     Flux can be from a short forecast (daily, then annualised) or from last year's
     monthly historical data (12 months, no scaling).
+    Demand can be reduced by insulation (lower heating demand) and heat pump (less electricity per unit heat).
 
     Inputs:
         latitude, longitude: location
-        annual_consumption_kwh: annual energy demand (kWh)
+        annual_consumption_kwh: annual energy demand (kWh) before insulation/heat-pump adjustment
         solar_type_params, wind_type_params: from src.data.energy_tiers (e.g. SOLAR_TIERS["budget"])
         pricing: optional override for solar_capex_per_kw, wind_capex_per_kw, grid_price_per_kwh, export_price_per_kwh
         solar_max_kw, wind_max_kw, step_kw: search range for optimisation
@@ -480,21 +534,36 @@ def get_optimised_system(
         min_demand_met_from_gen_pct: require at least this % of demand from solar/wind (default 50);
              set to 0 to allow 0 kW (grid-only) if cheapest.
         min_solar_kw, min_wind_kw: only consider solutions with at least this much solar/wind (default min_wind_kw=0.5).
+        heating_fraction: share of annual_consumption that is space heating (0–1, default 0.6).
+        insulation_r_value: insulation R-value in m²·K/W; 0 = no extra insulation (default).
+        heat_pump_cop: heat pump COP; 1.0 = electric heating (default), 2.5–3.5 for ASHP (e.g. from HEAT_PUMP_TIERS).
 
     Returns:
-        Dict with optimal_solar_kw, optimal_wind_kw, annual_demand_kwh, annual_generation_kwh,
-        financials_0_year, financials_5_year, financials_10_year, flux_source, flux_period_days.
+        Dict with optimal_solar_kw, optimal_wind_kw, annual_demand_kwh (demand used for sizing),
+        annual_demand_before_adjustments_kwh, heating_demand_after_insulation_kwh, heating_fraction, insulation_r_value, heat_pump_cop,
+        financials_0_year, financials_5_year, financials_10_year, flux_source, flux_period_days, etc.
     """
+    demand_adj = demand_after_insulation_and_heat_pump(
+        annual_consumption_kwh,
+        heating_fraction,
+        insulation_r_value,
+        heat_pump_cop,
+    )
+    demand_for_optimisation = demand_adj["electricity_demand_for_optimisation_kwh"]
     if flux_source == "last_year_monthly":
         flux = get_flux_monthly_last_year(latitude, longitude)
         flux_frequency = "monthly"
     else:
-        flux = get_flux_daily(latitude, longitude, start_date, end_date)
+        # Forecast path: use future dates and forecast API (use_archive=False)
+        if start_date is None or end_date is None:
+            start_date = datetime.utcnow().date().isoformat()
+            end_date = (datetime.utcnow().date() + timedelta(days=6)).isoformat()
+        flux = get_flux_daily(latitude, longitude, start_date, end_date, use_archive=False)
         flux_frequency = "daily"
     pr = {**DEFAULT_PRICING, **(pricing or {})}
     result = optimize_system_capacity(
         flux,
-        annual_consumption_kwh,
+        demand_for_optimisation,
         solar_type_params,
         wind_type_params,
         solar_capex_per_kw=pr["solar_capex_per_kw"],
@@ -512,4 +581,9 @@ def get_optimised_system(
     )
     result["flux_source"] = flux_source
     result["flux_period_days"] = result.pop("period_days")
+    result["annual_demand_before_adjustments_kwh"] = round(demand_adj["annual_demand_before_kwh"], 1)
+    result["heating_demand_after_insulation_kwh"] = round(demand_adj["heating_demand_after_insulation_kwh"], 1)
+    result["heating_fraction"] = heating_fraction
+    result["insulation_r_value"] = insulation_r_value
+    result["heat_pump_cop"] = heat_pump_cop
     return result
