@@ -9,6 +9,7 @@ Exit code 0 = success, 1 = failure.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -17,15 +18,23 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+# Set headless/GPU env before importing browser – can reduce macOS "Python quit unexpectedly"
+os.environ.setdefault("MOZ_HEADLESS", "1")
+os.environ.setdefault("MOZ_DISABLE_GPU_SANDBOX", "1")
+
 
 def main() -> int:
     if len(sys.argv) < 2:
-        print("Usage: python -m src.web.run_scrape <postcode>", file=sys.stderr)
+        print("Usage: python -m src.web.run_scrape <postcode> [home|business]", file=sys.stderr)
         return 1
     postcode = sys.argv[1].strip()
     if len(postcode) < 5:
         print("Postcode too short", file=sys.stderr)
         return 1
+    home_or_business = (sys.argv[2].strip().lower() if len(sys.argv) > 2 else "home")
+    if home_or_business not in ("home", "business"):
+        home_or_business = "home"
+    scraper = None
     try:
         from src.api.energyScraping.ScrapeTariff import ScrapeTariff
         scraper = ScrapeTariff()
@@ -36,13 +45,23 @@ def main() -> int:
             current_supplier="Octopus",
             pay_method="monthly_direct_debit",
             has_ev="No but interested",
+            home_or_business=home_or_business,
             headless=True,
         )
         return 0
     except Exception as e:
         print(f"Scrape failed: {e}", file=sys.stderr)
-        return 1
+        # Avoid Python shutdown/atexit so browser cleanup doesn't crash the process
+        os._exit(1)
+    finally:
+        # Release references so context manager can close browser before process exits
+        if scraper is not None:
+            scraper.browser = None
+            scraper.page = None
+        scraper = None
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    exit_code = main()
+    # Normal success path only; failure path uses os._exit(1)
+    sys.exit(exit_code)

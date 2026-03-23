@@ -29,6 +29,7 @@ _scrape_jobs_lock = threading.Lock()
 
 def _get_scrape_results(postcode: str) -> dict | None:
     """Load latest tariff scrape for postcode from DB. Returns None if DB unavailable or no data."""
+    import re
     postcode_norm = (postcode or "").strip().upper().replace(" ", "")
     if not postcode_norm:
         return None
@@ -41,22 +42,65 @@ def _get_scrape_results(postcode: str) -> dict | None:
             database="energy_tariff",
         )
         cursor = conn.cursor(dictionary=True)
-        # Latest search for this postcode (match normalized)
-        cursor.execute(
-            """
-            SELECT annual_electricity_kwh, latitude, longitude, search_date,
-                   new_supplier_name, tariff_name, unit_rate, standing_charge, is_green
-            FROM fact_tariff_search_simple
-            WHERE REPLACE(postcode, ' ', '') = %s
-              AND search_date = (
-                SELECT MAX(search_date) FROM fact_tariff_search_simple
-                WHERE REPLACE(postcode, ' ', '') = %s
-              )
-            ORDER BY new_supplier_name
-            """,
-            (postcode_norm, postcode_norm),
-        )
-        rows = cursor.fetchall()
+        rows = []
+        is_outward_only = bool(re.match(r"^[A-Z]{1,2}\d{1,2}[A-Z]?$", postcode_norm))
+
+        if is_outward_only:
+            # Outward-only postcode area search (e.g. BS39)
+            cursor.execute(
+                """
+                SELECT annual_electricity_kwh, latitude, longitude, search_date,
+                       new_supplier_name, tariff_name, unit_rate, standing_charge, is_green
+                FROM fact_tariff_search_simple
+                WHERE UPPER(outward_code) = %s
+                  AND search_date = (
+                    SELECT MAX(search_date) FROM fact_tariff_search_simple
+                    WHERE UPPER(outward_code) = %s
+                  )
+                ORDER BY new_supplier_name
+                """,
+                (postcode_norm, postcode_norm),
+            )
+            rows = cursor.fetchall()
+        else:
+            # Latest search for this full postcode (normalized, spaces optional)
+            cursor.execute(
+                """
+                SELECT annual_electricity_kwh, latitude, longitude, search_date,
+                       new_supplier_name, tariff_name, unit_rate, standing_charge, is_green
+                FROM fact_tariff_search_simple
+                WHERE REPLACE(UPPER(postcode), ' ', '') = %s
+                  AND search_date = (
+                    SELECT MAX(search_date) FROM fact_tariff_search_simple
+                    WHERE REPLACE(UPPER(postcode), ' ', '') = %s
+                  )
+                ORDER BY new_supplier_name
+                """,
+                (postcode_norm, postcode_norm),
+            )
+            rows = cursor.fetchall()
+
+            # Fallback: if full postcode not found, try outward code bucket from that postcode
+            if not rows:
+                m = re.match(r"^([A-Z]{1,2}\d{1,2}[A-Z]?)", postcode_norm)
+                outward = m.group(1) if m else ""
+                if outward:
+                    cursor.execute(
+                        """
+                        SELECT annual_electricity_kwh, latitude, longitude, search_date,
+                               new_supplier_name, tariff_name, unit_rate, standing_charge, is_green
+                        FROM fact_tariff_search_simple
+                        WHERE UPPER(outward_code) = %s
+                          AND search_date = (
+                            SELECT MAX(search_date) FROM fact_tariff_search_simple
+                            WHERE UPPER(outward_code) = %s
+                          )
+                        ORDER BY new_supplier_name
+                        """,
+                        (outward, outward),
+                    )
+                    rows = cursor.fetchall()
+
         cursor.close()
         conn.close()
         if not rows:
@@ -67,6 +111,8 @@ def _get_scrape_results(postcode: str) -> dict | None:
             usage = 3500  # fallback
         lat = float(first.get("latitude") or 0.0)
         lon = float(first.get("longitude") or 0.0)
+        search_date_val = first.get("search_date")
+        search_date_iso = search_date_val.isoformat() if hasattr(search_date_val, "isoformat") else (str(search_date_val) if search_date_val else None)
         tariffs = [
             {
                 "supplier_name": r["new_supplier_name"],
@@ -81,25 +127,28 @@ def _get_scrape_results(postcode: str) -> dict | None:
             "annual_electricity_kwh": int(usage),
             "latitude": lat,
             "longitude": lon,
+            "search_date": search_date_iso,
             "tariffs": tariffs,
         }
     except Exception:
         return None
 
 
-def _run_scrape_job(postcode_norm: str, postcode_display: str) -> None:
+def _run_scrape_job(postcode_norm: str, postcode_display: str, home_or_business: str = "home") -> None:
     """Run scraper in a subprocess (avoids Playwright 'Event loop is closed' in threads)."""
     import subprocess
     with _scrape_jobs_lock:
         _scrape_jobs[postcode_norm] = {"status": "running", "error": None}
     try:
-        print(f"[scrape] Starting subprocess for postcode {postcode_display} ...")
+        print(f"[scrape] Starting subprocess for postcode {postcode_display} ({home_or_business}) ...")
+        # start_new_session=True isolates the subprocess so a browser crash doesn't take down Flask
         proc = subprocess.run(
-            [sys.executable, "-m", "src.web.run_scrape", postcode_display],
+            [sys.executable, "-m", "src.web.run_scrape", postcode_display, home_or_business],
             cwd=PROJECT_ROOT,
             capture_output=True,
             text=True,
             timeout=300,
+            start_new_session=True,
         )
         if proc.returncode == 0:
             with _scrape_jobs_lock:
@@ -167,17 +216,24 @@ def api_scrape_results():
 def api_run_scrape():
     """Start a background tariff scrape for the given postcode. Returns 202 when started."""
     data = request.get_json() or {}
+    import re
     postcode = (data.get("postcode") or "").strip()
-    if not postcode or len(postcode) < 5:
-        return jsonify({"error": "postcode required (min 5 characters)"}), 400
     postcode_norm = postcode.upper().replace(" ", "")
+    # Accept outward-only (e.g. BS39) or full postcodes (e.g. BS1 1AA / BS394DB)
+    outward_re = re.compile(r"^[A-Z]{1,2}\d{1,2}[A-Z]?$")
+    full_re = re.compile(r"^[A-Z]{1,2}\d{1,2}[A-Z]?\d[A-Z]{2}$")
+    if not postcode_norm or not (outward_re.match(postcode_norm) or full_re.match(postcode_norm)):
+        return jsonify({"error": "postcode required (e.g. BS39 or BS1 1AA; spaces optional)"}), 400
+    home_or_business = (data.get("home_or_business") or "home").strip().lower()
+    if home_or_business not in ("home", "business"):
+        home_or_business = "home"
     with _scrape_jobs_lock:
         existing = _scrape_jobs.get(postcode_norm)
         if existing and existing.get("status") == "running":
             return jsonify({"error": "Scrape already running for this postcode"}), 409
     thread = threading.Thread(
         target=_run_scrape_job,
-        args=(postcode_norm, postcode),
+        args=(postcode_norm, postcode_norm, home_or_business),
         daemon=True,
     )
     thread.start()
@@ -244,6 +300,8 @@ def api_recommend():
         export_price_per_kwh = float(data.get("export_price_per_kwh", 0.05))
         optimize_over_years = float(data.get("optimize_over_years", 5))
         prefer_green = bool(data.get("prefer_green", False))
+        solar_max_kw = float(data.get("solar_max_kw", 20.0))
+        wind_max_kw = float(data.get("wind_max_kw", 10.0))
     except (TypeError, ValueError) as e:
         return jsonify({"error": f"Invalid input: {e}"}), 400
 
@@ -290,6 +348,8 @@ def api_recommend():
             insulation_r_value=insulation_r_value,
             heat_pump_cop=heat_pump_cop,
             prefer_green=prefer_green,
+            solar_max_kw=max(0.0, solar_max_kw),
+            wind_max_kw=max(0.0, wind_max_kw),
         )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -307,6 +367,11 @@ def api_recommend():
             "optimal_wind_kw": float(opt["optimal_wind_kw"]),
             "total_capacity_kw": float(opt["total_capacity_kw"]),
             "annual_demand_kwh": float(opt["annual_demand_kwh"]),
+            "annual_demand_before_adjustments_kwh": float(opt.get("annual_demand_before_adjustments_kwh", opt["annual_demand_kwh"])),
+            "heating_demand_after_insulation_kwh": float(opt.get("heating_demand_after_insulation_kwh", 0.0)),
+            "heating_fraction": float(opt.get("heating_fraction", heating_fraction)),
+            "insulation_r_value": float(opt.get("insulation_r_value", insulation_r_value)),
+            "heat_pump_cop": float(opt.get("heat_pump_cop", heat_pump_cop)),
             "annual_generation_kwh": float(opt["annual_generation_kwh"]),
             "annual_import_kwh": float(opt["annual_import_kwh"]),
             "annual_export_kwh": float(opt["annual_export_kwh"]),

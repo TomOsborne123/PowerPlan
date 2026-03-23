@@ -266,6 +266,7 @@ class ScrapeTariff:
                current_supplier: str = '',
                pay_method: str = 'monthly_direct_debit',
                has_ev: str = 'No',
+               home_or_business: str = 'home',
                headless: bool = False) -> List[Tariff]:
 
         url = "https://www.moneysupermarket.com/gas-and-electricity/"
@@ -279,17 +280,21 @@ class ScrapeTariff:
             print(f"✓ Coordinates: {self.location_data.get('latitude')}, {self.location_data.get('longitude')}")
         else:
             print("⚠ Could not lookup postcode data - will use defaults")
+            postcode_norm = (postcode or '').strip().upper().replace(" ", "")
+            outward_match = re.match(r"^([A-Z]{1,2}\d{1,2}[A-Z]?)", postcode_norm)
+            outward_code = outward_match.group(1) if outward_match else ""
+            dno_name, dno_id = PostcodeLookup._get_dno_from_outward_code(outward_code)
             self.location_data = {
-                'postcode': postcode,
-                'outward_code': postcode.split()[0] if ' ' in postcode else '',
+                'postcode': postcode_norm,
+                'outward_code': outward_code,
                 'latitude': 0.0,
                 'longitude': 0.0,
                 'region': '',
                 'region_code': '',
                 'admin_district': '',
                 'country': '',
-                'dno_name': 'Unknown',
-                'dno_id': 'Unknown',
+                'dno_name': dno_name,
+                'dno_id': dno_id,
             }
 
         try:
@@ -345,8 +350,9 @@ class ScrapeTariff:
                 # STEP 2: Postcode and address
                 self._step2_postcode_and_address(postcode, address_index)
 
-                # STEP 3: Home or Business (optional)
-                self._step3_home_or_business()
+                # STEP 3: Home or Business – user choice: "No, it's a home" or "Yes, it's a business"
+                self._step3_home_or_business(home_or_business)
+                time.sleep(1.5)  # Let fuel type options appear
 
                 # STEP 4: Select fuel type
                 self._step4_select_fuel_type(fuel_type)
@@ -357,9 +363,18 @@ class ScrapeTariff:
                 # STEP 6: See results
                 self._step6_see_results()
 
-                # Wait for results
+                # Wait for results to load (page may render cards via JS)
                 print("Waiting for results...")
                 time.sleep(5)
+                # Wait for at least one result card or common container to appear
+                for selector in [".results-new-item", "[data-testid*='result']", "[data-testid*='tariff']", ".tariff-card", ".deal-card", ".result-card", "article"]:
+                    try:
+                        self.page.wait_for_selector(selector, timeout=8000)
+                        time.sleep(2)
+                        break
+                    except Exception:
+                        continue
+                time.sleep(2)
 
                 # Get results HTML
                 html = self.page.content()
@@ -388,10 +403,16 @@ class ScrapeTariff:
         except Exception as e:
             print(f"❌ Error: {e}")
             if self.page:
-                self.page.screenshot(path=_debug_path('error_screenshot.png'))
-                with open(_debug_path('error_page.html'), 'w', encoding='utf-8') as f:
-                    f.write(self.page.content())
-                print("📸 Saved error screenshot and HTML")
+                try:
+                    self.page.screenshot(path=_debug_path('error_screenshot.png'))
+                    with open(_debug_path('error_page.html'), 'w', encoding='utf-8') as f:
+                        f.write(self.page.content())
+                    print("📸 Saved error screenshot and HTML")
+                except Exception:
+                    pass
+            # Release refs before context manager closes to reduce risk of double-close crash
+            self.page = None
+            self.browser = None
             raise
 
         finally:
@@ -796,48 +817,91 @@ class ScrapeTariff:
             self.page.screenshot(path=_debug_path('step2_error.png'))
             raise
 
-    def _step3_home_or_business(self):
-        """STEP 3: Select 'Home' if business/home choice appears (optional step)"""
+    def _step3_home_or_business(self, home_or_business: str = 'home'):
+        """STEP 3: Select 'No, it's a home' or 'Yes, it's a business' so fuel type options appear."""
 
-        print("\n--- STEP 3: Home or Business (Optional) ---")
+        is_business = (home_or_business or '').strip().lower() in ('business', 'yes', 'true', '1')
+        choice = "business" if is_business else "home"
+        print(f"\n--- STEP 3: Home or Business ({choice}) ---")
 
         try:
-            # Wait a moment for page to load
             time.sleep(2)
 
-            # Try to find home/business buttons
-            home_selectors = [
-                "button:has-text('Home')",
-                "button:has-text('home')",
-                "a:has-text('Home')",
-                "label:has-text('Home')",
-                "input[value='home']",
-                "input[value='Home']",
-                "button[data-value='home']",
-                "div:has-text('Home')",
-            ]
+            if is_business:
+                # "Yes, it's a business"
+                button_texts = [
+                    "Yes, it's a business",
+                    "Yes it's a business",
+                    "It's a business",
+                    "Business",
+                ]
+                selectors = [
+                    "button:has-text(\"Yes, it's a business\")",
+                    "a:has-text(\"Yes, it's a business\")",
+                    "label:has-text(\"Yes, it's a business\")",
+                    "[role='button']:has-text(\"Yes, it's a business\")",
+                    "button:has-text('Business')",
+                    "a:has-text('Business')",
+                ]
+            else:
+                # "No, it's a home"
+                button_texts = [
+                    "No, it's a home",
+                    "No it's a home",
+                    "It's a home",
+                    "No, just home",
+                    "Just home",
+                    "Home",
+                ]
+                selectors = [
+                    "button:has-text(\"No, it's a home\")",
+                    "a:has-text(\"No, it's a home\")",
+                    "label:has-text(\"No, it's a home\")",
+                    "[role='button']:has-text(\"No, it's a home\")",
+                    "button:has-text('No, just home')",
+                    "a:has-text('No, just home')",
+                    "button:has-text('Just home')",
+                    "a:has-text('Just home')",
+                    "button:has-text('Home')",
+                    "a:has-text('Home')",
+                    "label:has-text('Home')",
+                ]
 
-            home_found = False
-            for selector in home_selectors:
+            found = False
+            for selector in selectors:
                 try:
-                    home_btn = self.page.locator(selector).first
-                    if home_btn.is_visible(timeout=2000):
-                        home_btn.scroll_into_view_if_needed()
+                    btn = self.page.locator(selector).first
+                    if btn.is_visible(timeout=2000):
+                        btn.scroll_into_view_if_needed()
                         time.sleep(0.5)
-                        home_btn.click()
-                        print(f"✓ Selected 'Home' using: {selector}")
-                        home_found = True
+                        btn.click()
+                        print(f"✓ Selected '{choice}' using: {selector}")
+                        found = True
                         time.sleep(2)
                         break
-                except:
+                except Exception:
                     continue
 
-            if not home_found:
-                print("⚠ No Home/Business selection found - skipping this step")
+            if not found:
+                for text in button_texts:
+                    try:
+                        loc = self.page.get_by_text(text, exact=False).first
+                        if loc.is_visible(timeout=1500):
+                            loc.scroll_into_view_if_needed()
+                            time.sleep(0.5)
+                            loc.click()
+                            print(f"✓ Selected '{choice}' (get_by_text: {text!r})")
+                            found = True
+                            time.sleep(2)
+                            break
+                    except Exception:
+                        continue
+
+            if not found:
+                print(f"⚠ No '{choice}' button found - skipping (fuel type step may fail)")
 
         except Exception as e:
             print(f"⚠ Error in step 3 (non-critical): {str(e)}")
-            # Don't raise - this step is optional
 
     def _step4_select_fuel_type(self, fuel_type: str):
         """STEP 4: Select fuel type (Gas, Gas & Electricity, or Electricity)"""
@@ -848,23 +912,123 @@ class ScrapeTariff:
             # Wait for fuel type options to appear
             time.sleep(2)
 
-            # Map fuel_type parameter to button text
+            # Save page state for debugging if step fails (so we can inspect structure)
+            def _save_step4_debug():
+                try:
+                    self.page.screenshot(path=_debug_path('step4_fuel_type_error.png'))
+                    with open(_debug_path("step4_fuel_page.html"), "w", encoding="utf-8") as f:
+                        f.write(self.page.content())
+                    print("Saved debug files: step4_fuel_type_error.png and step4_fuel_page.html")
+                except Exception:
+                    pass
+
+            # Map fuel_type parameter to button/link text (site may use various wordings)
+            # Note: MoneySupermarket uses "Gas  & Electicity" (two spaces, typo) - include exact match
             fuel_type_map = {
-                'gas': ['Gas', 'gas', 'Gas only'],
-                'both': ['Gas & Electricity', 'Gas and Electricity', 'Both', 'Dual fuel', 'Gas & Electric'],
-                'electricity': ['Electricity', 'electricity', 'Electric', 'Electricity only', 'Electric only'],
+                'gas': ['Gas', 'gas', 'Gas only', 'Gas only tariffs', 'I only use gas'],
+                'both': [
+                    'Gas  & Electicity',  # exact as on site (two spaces, typo)
+                    'Gas & Electricity', 'Gas and Electricity', 'Both', 'Dual fuel', 'Gas & Electric',
+                    'Gas and Electric', 'Gas & electricity', 'Gas and electricity', 'Compare both',
+                    'Dual', 'I have both', 'Gas and electricity', 'Dual fuel tariffs',
+                    'I use both gas and electricity', 'Gas & Electricity tariffs',
+                ],
+                'electricity': [
+                    'Electricity', 'electricity', 'Electric', 'Electricity only', 'Electric only',
+                    'Electricity only tariffs', 'I only use electricity', 'Electric only tariffs',
+                ],
             }
 
-            # Get the list of possible button texts for this fuel type
-            if fuel_type.lower() not in fuel_type_map:
+            # Normalise: accept gas_and_electricity / gas_and_electric as 'both'
+            fuel_key = fuel_type.lower().strip()
+            if fuel_key in ('gas_and_electricity', 'gas_and_electric', 'dual'):
+                fuel_key = 'both'
+            if fuel_key not in fuel_type_map:
                 print(f"⚠ Invalid fuel_type: {fuel_type}. Using 'both' as default.")
-                fuel_type = 'both'
+                fuel_key = 'both'
 
-            possible_texts = fuel_type_map[fuel_type.lower()]
-            print(f"Looking for fuel type: {fuel_type} (possible texts: {possible_texts})")
+            possible_texts = fuel_type_map[fuel_key]
+            print(f"Looking for fuel type: {fuel_key} (possible texts: {possible_texts})")
 
             # Try to find and click the appropriate button
             fuel_selected = False
+
+            # For 'both': try Playwright text= regex (matches any element with that text)
+            if not fuel_selected and fuel_key == 'both':
+                try:
+                    loc = self.page.locator("text=/Gas\\s*&\\s*Electic/i").first
+                    if loc.is_visible(timeout=2000):
+                        loc.scroll_into_view_if_needed()
+                        time.sleep(0.5)
+                        loc.click()
+                        print("✓ Selected fuel type (text= regex)")
+                        fuel_selected = True
+                        time.sleep(2)
+                except Exception:
+                    pass
+
+            # For 'both': get_by_text with exact site string and with substring
+            if not fuel_selected and fuel_key == 'both':
+                for search_text in ["Gas  & Electicity", "Electicity", "Gas & Electic"]:
+                    try:
+                        loc = self.page.get_by_text(search_text, exact=False).first
+                        if loc.is_visible(timeout=1500):
+                            loc.scroll_into_view_if_needed()
+                            time.sleep(0.5)
+                            loc.click()
+                            print(f"✓ Selected fuel type (get_by_text: {search_text!r})")
+                            fuel_selected = True
+                            time.sleep(2)
+                            break
+                    except Exception:
+                        continue
+
+            # For 'both': JavaScript fallback – text may be split across child nodes
+            if not fuel_selected and fuel_key == 'both':
+                try:
+                    clicked = self.page.evaluate("""
+() => {
+  var walk = function(el) {
+    var text = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+    if (/Gas\\s*&\\s*Electic/i.test(text)) {
+      var target = el.closest('button, a, [role=\"button\"], [onclick]') || el;
+      try {
+        target.click();
+        return true;
+      } catch (e) { return false; }
+    }
+    for (var i = 0; i < el.children.length; i++) {
+      if (walk(el.children[i])) return true;
+    }
+    return false;
+  };
+  return walk(document.body);
+}
+                    """)
+                    if clicked:
+                        print("✓ Selected fuel type (JS: element containing Gas & Electic)")
+                        fuel_selected = True
+                        time.sleep(2)
+                except Exception as e:
+                    print("  JS fallback:", str(e))
+
+            # For 'both': try regex on button/link
+            if not fuel_selected and fuel_key == 'both':
+                for role_or_tag in ["button", "a"]:
+                    try:
+                        loc = self.page.locator(role_or_tag).filter(
+                            has_text=re.compile(r"Gas\s*&\s*Electic", re.IGNORECASE)
+                        ).first
+                        if loc.is_visible(timeout=2000):
+                            loc.scroll_into_view_if_needed()
+                            time.sleep(0.5)
+                            loc.click()
+                            print("✓ Selected fuel type (regex: Gas & Electic...)")
+                            fuel_selected = True
+                            time.sleep(2)
+                            break
+                    except Exception:
+                        continue
 
             for text in possible_texts:
                 if fuel_selected:
@@ -877,6 +1041,8 @@ class ScrapeTariff:
                     f"label:has-text('{text}')",
                     f"div[role='button']:has-text('{text}')",
                     f"input[value='{text}']",
+                    f"[data-testid]:has-text('{text}')",
+                    f"[data-value]:has-text('{text}')",
                 ]
 
                 for selector in selectors:
@@ -892,15 +1058,57 @@ class ScrapeTariff:
                             fuel_selected = True
                             time.sleep(2)
                             break
-                    except:
+                    except Exception:
                         continue
+
+            # Fallback for 'both': any clickable containing both "gas" and "electric" (case-insensitive)
+            if not fuel_selected and fuel_key == 'both':
+                for fallback_selector in [
+                    "button:has-text('Gas'):has-text('Electric')",
+                    "a:has-text('Gas'):has-text('Electric')",
+                    "button:has-text('Dual')",
+                    "a:has-text('Dual')",
+                ]:
+                    try:
+                        el = self.page.locator(fallback_selector).first
+                        if el.is_visible(timeout=2000):
+                            el.scroll_into_view_if_needed()
+                            time.sleep(0.5)
+                            el.click()
+                            print(f"✓ Selected fuel type (fallback selector: {fallback_selector})")
+                            fuel_selected = True
+                            time.sleep(2)
+                            break
+                    except Exception:
+                        continue
+                if not fuel_selected:
+                    try:
+                        combined = self.page.get_by_role("button").filter(has_text=re.compile(r"gas.*electric|electric.*gas", re.I)).first
+                        if combined.is_visible(timeout=3000):
+                            combined.scroll_into_view_if_needed()
+                            time.sleep(0.5)
+                            combined.click()
+                            print("✓ Selected fuel type (fallback: button containing 'gas' and 'electric')")
+                            fuel_selected = True
+                            time.sleep(2)
+                    except Exception:
+                        pass
+                if not fuel_selected:
+                    try:
+                        combined = self.page.locator("a").filter(has_text=re.compile(r"gas.*electric|electric.*gas", re.I)).first
+                        if combined.is_visible(timeout=3000):
+                            combined.scroll_into_view_if_needed()
+                            time.sleep(0.5)
+                            combined.click()
+                            print("✓ Selected fuel type (fallback: link containing 'gas' and 'electric')")
+                            fuel_selected = True
+                            time.sleep(2)
+                    except Exception:
+                        pass
 
             if not fuel_selected:
                 print("✗ Failed to find fuel type selection")
-                self.page.screenshot(path=_debug_path('step4_fuel_type_error.png'))
-                with open(_debug_path("step4_fuel_page.html"), "w", encoding="utf-8") as f:
-                    f.write(self.page.content())
-                print("Saved debug files: step4_fuel_type_error.png and step4_fuel_page.html")
+                _save_step4_debug()
                 raise Exception(f"Could not find fuel type option for: {fuel_type}")
 
             # Look for continue button
@@ -1098,22 +1306,62 @@ class ScrapeTariff:
     def _extract_tariff_data(self) -> List[Tariff]:
         """Extract tariff data for all tariff result cards on the page."""
 
-        cards = self.soup.select(".results-new-item")
+        # Try multiple selectors – site may have changed class names
+        CARD_SELECTORS = [
+            ".results-new-item",
+            "[data-testid*='tariff']",
+            "[data-testid*='result']",
+            ".tariff-card",
+            ".deal-card",
+            ".result-card",
+            ".energy-deal",
+            ".product-card",
+            ".comparison-result",
+            "article[class*='result']",
+            "article[class*='tariff']",
+            "li[class*='result']",
+            "li[class*='tariff']",
+            "[class*='results-new-item']",
+            "[class*='tariff-card']",
+        ]
+        cards = []
+        for sel in CARD_SELECTORS:
+            cards = self.soup.select(sel)
+            if len(cards) >= 1:
+                print(f"  Found {len(cards)} cards using selector: {sel}")
+                break
         if not cards:
-            raise Exception("Could not find any tariff result cards in results_page.html")
+            # Log sample of class names in the page to help debug
+            all_classes = set()
+            for tag in self.soup.find_all(class_=True):
+                c = tag.get("class") or []
+                for cl in c:
+                    if isinstance(cl, str):
+                        all_classes.add(cl)
+            sample = sorted(all_classes)[:40]
+            print("  No tariff cards found. Sample class names on page:", sample)
+            raise Exception(
+                "Could not find any tariff result cards in results_page.html. "
+                "The comparison site may have changed its HTML. Check output/scrape_debug/results_page.html "
+                "and look for the class used for each tariff/result card, then add it to CARD_SELECTORS in _extract_tariff_data."
+            )
 
         def build_tariff_from_card(card) -> Tariff:
+            # Annual cost from page-level usage callout (may be absent if layout changed)
+            annual_cost_ = 0
             cost_span = self.soup.find(
                 "span",
                 class_="current-usage-card__callout__value",
                 string=re.compile("/yr")
             )
-
-            text = cost_span.get_text(strip=True)
-
-            # Extract annual price
-            annual_cost_ = re.search(r"£([\d,]+)/yr", text).group(1)
-            annual_cost_ = int(annual_cost_.replace(",", ""))
+            if cost_span:
+                text = cost_span.get_text(strip=True)
+                m = re.search(r"£([\d,]+)/yr", text)
+                if m:
+                    try:
+                        annual_cost_ = int(m.group(1).replace(",", ""))
+                    except ValueError:
+                        pass
 
             annual_electricity_kwh = None
             annual_gas_kwh = None
@@ -1148,18 +1396,30 @@ class ScrapeTariff:
                                         annual_electricity_kwh = value
                                 except ValueError:
                                     pass
-            # Helper: get text within this card
-            def get_card_text(selector: str, default: str = "") -> str:
-                el = card.select_one(selector)
-                return el.get_text(strip=True) if el else default
+            # Helper: get text within this card; try multiple selectors
+            def get_card_text(selectors, default: str = "") -> str:
+                if isinstance(selectors, str):
+                    selectors = [selectors]
+                for sel in selectors:
+                    el = card.select_one(sel)
+                    if el:
+                        return el.get_text(strip=True)
+                return default
 
-            # --- Supplier & tariff names ---
-            new_supplier_name = get_card_text(
-                ".results-new-item-brand__provider-name", "Unknown Supplier"
-            )
-            tariff_name = get_card_text(
-                ".results-new-item-brand__tariff-name", "Unknown Tariff"
-            )
+            # --- Supplier & tariff names (try multiple possible class names) ---
+            new_supplier_name = get_card_text([
+                ".results-new-item-brand__provider-name",
+                "[class*='provider-name']",
+                "[class*='supplier']",
+                ".supplier-name",
+                "h3",
+            ], "Unknown Supplier")
+            tariff_name = get_card_text([
+                ".results-new-item-brand__tariff-name",
+                "[class*='tariff-name']",
+                "[class*='tariff-name']",
+                ".tariff-name",
+            ], "Unknown Tariff")
 
             # --- Tariff type & fixed length ---
             fixed_price_length_months = 0

@@ -6,12 +6,15 @@ const DEFAULT_TARIFFS = [
   { supplier_name: 'EDF', tariff_name: 'Standard', unit_rate: 26.8, standing_charge_day: 52, is_green: true },
 ]
 
+const normalizePostcode = (p) => (p || '').toUpperCase().replace(/\s+/g, '')
+const isFullPostcode = (norm) => /^[A-Z]{1,2}\d{1,2}[A-Z]?\d[A-Z]{2}$/.test(norm)
+
 export function usePostcodeLookup(setLatitude, setLongitude) {
   const [status, setStatus] = useState({ message: '', ok: null })
 
   const lookup = useCallback(async (postcode) => {
-    const trimmed = (postcode || '').trim()
-    if (!trimmed || trimmed.length < 5) {
+    const norm = normalizePostcode(postcode)
+    if (!norm || !isFullPostcode(norm)) {
       setStatus({ message: '', ok: null })
       return
     }
@@ -20,7 +23,7 @@ export function usePostcodeLookup(setLatitude, setLongitude) {
       const r = await fetch('/api/postcode', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ postcode: trimmed }),
+        body: JSON.stringify({ postcode: norm }),
       })
       const data = await r.json()
       if (r.ok && data.latitude != null) {
@@ -40,22 +43,22 @@ export function usePostcodeLookup(setLatitude, setLongitude) {
 }
 
 export async function fetchScrapeResults(postcode) {
-  const trimmed = (postcode || '').trim()
-  if (!trimmed) return null
-  const r = await fetch(`/api/scrape-results?postcode=${encodeURIComponent(trimmed)}`)
+  const norm = normalizePostcode(postcode)
+  if (!norm) return null
+  const r = await fetch(`/api/scrape-results?postcode=${encodeURIComponent(norm)}`)
   const data = await r.json()
   if (!r.ok) return null
   return data
 }
 
-/** Start a background scrape for postcode. Returns { status: 'started', postcode } or throws. */
-export async function fetchRunScrape(postcode) {
-  const trimmed = (postcode || '').trim()
-  if (!trimmed) throw new Error('Postcode required')
+/** Start a background scrape for postcode. homeOrBusiness: 'home' | 'business'. Returns { status: 'started', postcode } or throws. */
+export async function fetchRunScrape(postcode, homeOrBusiness = 'home') {
+  const norm = normalizePostcode(postcode)
+  if (!norm) throw new Error('Postcode required')
   const r = await fetch('/api/run-scrape', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ postcode: trimmed }),
+    body: JSON.stringify({ postcode: norm, home_or_business: homeOrBusiness === 'business' ? 'business' : 'home' }),
   })
   const data = await r.json()
   if (!r.ok) throw new Error(data.error || 'Failed to start scrape')
@@ -64,9 +67,9 @@ export async function fetchRunScrape(postcode) {
 
 /** Get scrape job status: { status: 'idle'|'running'|'completed'|'failed', error? } */
 export async function fetchScrapeStatus(postcode) {
-  const trimmed = (postcode || '').trim()
-  if (!trimmed) return { status: 'idle' }
-  const r = await fetch(`/api/scrape-status?postcode=${encodeURIComponent(trimmed)}`)
+  const norm = normalizePostcode(postcode)
+  if (!norm) return { status: 'idle' }
+  const r = await fetch(`/api/scrape-status?postcode=${encodeURIComponent(norm)}`)
   const data = await r.json()
   return r.ok ? data : { status: 'idle' }
 }
