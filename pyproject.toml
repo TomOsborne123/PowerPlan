@@ -22,6 +22,7 @@ dependencies = [
     "bs4>=0.0.2",
     "urllib3>=2.6.3",
     "pvlib>=0.10",
+    "camoufox>=0.4.11",
 ]
 
 [build-system]

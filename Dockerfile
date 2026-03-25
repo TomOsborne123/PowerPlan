@@ -16,7 +16,8 @@ FROM python:3.11-slim AS backend
 WORKDIR /app
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
@@ -27,7 +28,9 @@ COPY pyproject.toml README.md LICENSE* ./
 COPY src/ ./src/
 
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel \
- && pip install --no-cache-dir .
+ && pip install --no-cache-dir . \
+ && python -m playwright install-deps \
+ && python -m camoufox fetch
 
 # Copy built frontend into Flask static folder
 COPY --from=frontend-build /app/src/web/static/ ./src/web/static/
