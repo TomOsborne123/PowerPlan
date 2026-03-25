@@ -18,12 +18,18 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from flask import Flask, jsonify, request, send_from_directory
+from flask_cors import CORS
 
 from src.db import mysql_config
 
 app = Flask(__name__, static_folder="static", static_url_path="")
 # Resolve static_folder so it works when run from project root
 app.static_folder = os.path.join(os.path.dirname(__file__), "static")
+
+# Browser site on Netlify calls this API on another origin — set CORS_ORIGINS=https://your-site.netlify.app
+_cors_origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip()]
+if _cors_origins:
+    CORS(app, resources={r"/api/*": {"origins": _cors_origins}})
 
 # In-memory status for background scrape jobs: postcode_norm -> {"status": "running"|"completed"|"failed", "error": str|None}
 _scrape_jobs: dict[str, dict] = {}

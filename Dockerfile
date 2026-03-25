@@ -35,6 +35,6 @@ COPY --from=frontend-build /app/src/web/static/ ./src/web/static/
 ENV PORT=5001
 EXPOSE 5001
 
-# Production server (no auto-reloader)
-CMD ["gunicorn", "-b", "0.0.0.0:5001", "--workers", "2", "--threads", "4", "--timeout", "180", "src.web.app:app"]
+# Production server (no auto-reloader). Many hosts set PORT at runtime.
+CMD ["sh", "-c", "exec gunicorn -b 0.0.0.0:${PORT:-5001} --workers 2 --threads 4 --timeout 180 src.web.app:app"]
 

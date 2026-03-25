@@ -1,7 +1,10 @@
 [build]
   base = "frontend"
-  command = "npm ci && npm run build"
+  # NETLIFY=1 => vite build outputs to frontend/dist (see frontend/vite.config.js)
+  command = "NETLIFY=1 npm ci && npm run build"
   publish = "dist"
+  # Set in Netlify UI → Environment variables (needed for API calls from the browser):
+  # VITE_API_BASE_URL = https://your-python-api.example.com   (no trailing slash)
 
 # SPA routing (so deep links work)
 [[redirects]]
