@@ -23,6 +23,21 @@ os.environ.setdefault("MOZ_HEADLESS", "1")
 os.environ.setdefault("MOZ_DISABLE_GPU_SANDBOX", "1")
 
 
+def _scraper_headless():
+    """
+    Camoufox: True = native headless, 'virtual' = Xvfb (needs `xvfb` package in Docker).
+    Env SCRAPER_HEADLESS: 1/true, 0/false, virtual (default: virtual on Linux, True elsewhere).
+    """
+    raw = (os.environ.get("SCRAPER_HEADLESS") or "").strip().lower()
+    if raw in ("1", "true", "yes"):
+        return True
+    if raw in ("0", "false", "no"):
+        return False
+    if raw == "virtual":
+        return "virtual"
+    return "virtual" if sys.platform.startswith("linux") else True
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print("Usage: python -m src.web.run_scrape <postcode> [home|business]", file=sys.stderr)
@@ -46,8 +61,7 @@ def main() -> int:
             pay_method="monthly_direct_debit",
             has_ev="No but interested",
             home_or_business=home_or_business,
-            # Camoufox/Playwright can be more stable under linux in Docker with a virtual display.
-            headless="virtual",
+            headless=_scraper_headless(),
         )
         return 0
     except Exception as e:
