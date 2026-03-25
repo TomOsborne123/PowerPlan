@@ -32,6 +32,22 @@ def _debug_path(name: str) -> str:
         return name
 
 
+# Pacing between Playwright actions (seconds). Reduced vs original fixed sleeps;
+# increase any value here if MoneySupermarket starts flaking on slow loads.
+_SCRAPE_AFTER_GOTO = 2.0
+_SCRAPE_AFTER_RELOAD = 1.5
+_SCRAPE_CLOUDFLARE = 6.0
+_SCRAPE_BEFORE_FUEL = 0.8
+_SCRAPE_RESULTS_POLL = 2.0
+_SCRAPE_AFTER_RESULTS_SELECTOR = 1.0
+_SCRAPE_POSTCODE_DOM = 2.5
+_SCRAPE_AFTER_SUBMIT = 1.5
+_SCRAPE_AFTER_CLICK = 1.0
+_SCRAPE_PRE_CLICK = 0.6
+_SCRAPE_MICRO = 0.35
+_SCRAPE_SHORT = 0.5
+
+
 class PostcodeLookup:
     """Lookup location data from UK postcodes"""
     
@@ -318,7 +334,7 @@ class ScrapeTariff:
 
                 print("Loading page...")
                 self.page.goto(url, wait_until='load')
-                time.sleep(5)
+                time.sleep(_SCRAPE_AFTER_GOTO)
 
                 print(f"Page title: {self.page.title()}")
 
@@ -336,12 +352,12 @@ class ScrapeTariff:
                 if page_content[:100].count('�') > 5 or page_content[:100].count('\\x') > 5:
                     print("⚠️  Garbled content detected - trying reload...")
                     self.page.reload(wait_until='networkidle')
-                    time.sleep(3)
+                    time.sleep(_SCRAPE_AFTER_RELOAD)
                     page_content = self.page.content()
 
                 if "cloudflare" in page_content.lower() or "verify you are human" in page_content.lower():
                     print("⚠️  Cloudflare detected - waiting for auto-resolution...")
-                    time.sleep(10)
+                    time.sleep(_SCRAPE_CLOUDFLARE)
 
                 # STEP 0: Handle cookies and start quote button
                 self._step0_cookies_and_start()
@@ -354,7 +370,7 @@ class ScrapeTariff:
 
                 # STEP 3: Home or Business – user choice: "No, it's a home" or "Yes, it's a business"
                 self._step3_home_or_business(home_or_business)
-                time.sleep(1.5)  # Let fuel type options appear
+                time.sleep(_SCRAPE_BEFORE_FUEL)  # Let fuel type options appear
 
                 # STEP 4: Select fuel type
                 self._step4_select_fuel_type(fuel_type)
@@ -367,16 +383,16 @@ class ScrapeTariff:
 
                 # Wait for results to load (page may render cards via JS)
                 print("Waiting for results...")
-                time.sleep(5)
+                time.sleep(_SCRAPE_RESULTS_POLL)
                 # Wait for at least one result card or common container to appear
                 for selector in [".results-new-item", "[data-testid*='result']", "[data-testid*='tariff']", ".tariff-card", ".deal-card", ".result-card", "article"]:
                     try:
                         self.page.wait_for_selector(selector, timeout=8000)
-                        time.sleep(2)
+                        time.sleep(_SCRAPE_AFTER_RESULTS_SELECTOR)
                         break
                     except Exception:
                         continue
-                time.sleep(2)
+                time.sleep(_SCRAPE_AFTER_RESULTS_SELECTOR)
 
                 # Get results HTML
                 html = self.page.content()
@@ -448,7 +464,7 @@ class ScrapeTariff:
                         cookie_btn.click()
                         print(f"✓ Clicked cookie button using: {selector}")
                         cookie_handled = True
-                        time.sleep(2)
+                        time.sleep(_SCRAPE_AFTER_CLICK)
                         break
                 except:
                     continue
@@ -461,7 +477,7 @@ class ScrapeTariff:
             print(f"Current URL: {self.page.url}")
 
             # Wait a bit for page to fully load
-            time.sleep(2)
+            time.sleep(_SCRAPE_AFTER_CLICK)
 
             # Check for various CTA buttons
             all_cta_buttons = self.page.locator("a[class*='cta']").count()
@@ -502,7 +518,7 @@ class ScrapeTariff:
                     start_btn = self.page.locator(selector).first
                     if start_btn.is_visible(timeout=3000):
                         start_btn.scroll_into_view_if_needed()
-                        time.sleep(1)
+                        time.sleep(_SCRAPE_PRE_CLICK)
 
                         try:
                             start_btn.click(timeout=5000)
@@ -512,7 +528,7 @@ class ScrapeTariff:
 
                         print(f"✓ Clicked 'Start a quote' using: {selector}")
                         quote_started = True
-                        time.sleep(3)
+                        time.sleep(_SCRAPE_AFTER_SUBMIT)
                         break
                 except Exception as e:
                     print(f"  Failed: {type(e).__name__}")
@@ -553,7 +569,7 @@ class ScrapeTariff:
 
             # Give the page a moment to render the email step/field.
             # Then attempt to locate the email input robustly.
-            time.sleep(2)
+            time.sleep(_SCRAPE_AFTER_CLICK)
 
             # Try different selectors for email input
             email_selectors = [
@@ -588,7 +604,7 @@ class ScrapeTariff:
                     candidate.wait_for(state="visible", timeout=5000)
 
                     candidate.scroll_into_view_if_needed()
-                    time.sleep(0.35)
+                    time.sleep(_SCRAPE_MICRO)
 
                     # Clear any existing text and enter email
                     candidate.click()
@@ -597,7 +613,7 @@ class ScrapeTariff:
                     email_input = candidate
                     print(f"✓ Entered email using: {selector}")
                     email_entered = True
-                    time.sleep(1)
+                    time.sleep(_SCRAPE_PRE_CLICK)
                     break
                 except Exception as e:
                     continue
@@ -626,11 +642,11 @@ class ScrapeTariff:
                     submit_btn = self.page.locator(selector).first
                     if submit_btn.is_visible(timeout=2000):
                         submit_btn.scroll_into_view_if_needed()
-                        time.sleep(0.5)
+                        time.sleep(_SCRAPE_SHORT)
                         submit_btn.click()
                         print(f"✓ Clicked submit using: {selector}")
                         submitted = True
-                        time.sleep(3)
+                        time.sleep(_SCRAPE_AFTER_SUBMIT)
                         break
                 except:
                     continue
@@ -642,7 +658,7 @@ class ScrapeTariff:
                     if email_input is not None:
                         email_input.press("Enter")
                     print("✓ Pressed Enter on email field")
-                    time.sleep(3)
+                    time.sleep(_SCRAPE_AFTER_SUBMIT)
                 except:
                     print("✗ Failed to submit form")
                     self.page.screenshot(path=_debug_path("debug_no_submit.png"))
@@ -684,12 +700,12 @@ class ScrapeTariff:
 
             # Type slowly like a human
             postcode_input.clear()
-            postcode_input.type(postcode, delay=100)  # 100ms delay between keystrokes
+            postcode_input.type(postcode, delay=50)  # 50ms between keystrokes (faster but still human-ish)
 
             print(f"✓ Entered postcode: {postcode}")
 
             # Submit postcode
-            time.sleep(1)
+            time.sleep(_SCRAPE_PRE_CLICK)
             try:
                 postcode_input.press("Enter")
                 print("✓ Submitted postcode (Enter key)")
@@ -704,7 +720,7 @@ class ScrapeTariff:
                     print("⚠ Could not submit - trying to continue anyway")
 
             # Wait for address dropdown or list to appear (site may use select or custom widget)
-            time.sleep(5)
+            time.sleep(_SCRAPE_POSTCODE_DOM)
 
             # Select address - try <select> first, then custom dropdowns (role="listbox", etc.)
             address_selected = False
@@ -724,7 +740,7 @@ class ScrapeTariff:
 
                         # Scroll into view
                         address_dropdown.scroll_into_view_if_needed()
-                        time.sleep(0.5)
+                        time.sleep(_SCRAPE_SHORT)
 
                         # Get available addresses
                         options = address_dropdown.locator("option").all()
@@ -763,7 +779,7 @@ class ScrapeTariff:
                                 print(f"⚠ Not enough addresses (found {len(options)}, need {address_index + 1})")
 
                         if address_selected:
-                            time.sleep(1)
+                            time.sleep(_SCRAPE_PRE_CLICK)
                             break
 
                 except Exception as e:
@@ -785,10 +801,10 @@ class ScrapeTariff:
                         if len(opts) > address_index:
                             print(f"✓ Found address list using: {list_selector} ({len(opts)} items)")
                             opts[address_index].scroll_into_view_if_needed()
-                            time.sleep(0.3)
+                            time.sleep(_SCRAPE_MICRO)
                             opts[address_index].click()
                             address_selected = True
-                            time.sleep(1)
+                            time.sleep(_SCRAPE_PRE_CLICK)
                             break
                     except Exception as e:
                         print(f"  List selector {list_selector}: {type(e).__name__}")
@@ -803,7 +819,7 @@ class ScrapeTariff:
                 raise Exception("Could not select address from dropdown")
 
             # Submit address selection
-            time.sleep(1)
+            time.sleep(_SCRAPE_PRE_CLICK)
             continue_clicked = False
             continue_selectors = [
                 "button:has-text('Continue')",
@@ -818,7 +834,7 @@ class ScrapeTariff:
                     continue_btn = self.page.locator(selector).first
                     if continue_btn.is_visible(timeout=2000):
                         continue_btn.scroll_into_view_if_needed()
-                        time.sleep(0.5)
+                        time.sleep(_SCRAPE_SHORT)
                         continue_btn.click()
                         print(f"✓ Clicked continue button using: {selector}")
                         continue_clicked = True
@@ -829,7 +845,7 @@ class ScrapeTariff:
             if not continue_clicked:
                 print("⚠ No continue button found after address - may auto-submit")
 
-            time.sleep(3)
+            time.sleep(_SCRAPE_AFTER_SUBMIT)
             print("✓ Step 2 complete")
 
         except Exception as e:
@@ -845,7 +861,7 @@ class ScrapeTariff:
         print(f"\n--- STEP 3: Home or Business ({choice}) ---")
 
         try:
-            time.sleep(2)
+            time.sleep(_SCRAPE_AFTER_CLICK)
 
             if is_business:
                 # "Yes, it's a business"
@@ -893,11 +909,11 @@ class ScrapeTariff:
                     btn = self.page.locator(selector).first
                     if btn.is_visible(timeout=2000):
                         btn.scroll_into_view_if_needed()
-                        time.sleep(0.5)
+                        time.sleep(_SCRAPE_SHORT)
                         btn.click()
                         print(f"✓ Selected '{choice}' using: {selector}")
                         found = True
-                        time.sleep(2)
+                        time.sleep(_SCRAPE_AFTER_CLICK)
                         break
                 except Exception:
                     continue
@@ -908,11 +924,11 @@ class ScrapeTariff:
                         loc = self.page.get_by_text(text, exact=False).first
                         if loc.is_visible(timeout=1500):
                             loc.scroll_into_view_if_needed()
-                            time.sleep(0.5)
+                            time.sleep(_SCRAPE_SHORT)
                             loc.click()
                             print(f"✓ Selected '{choice}' (get_by_text: {text!r})")
                             found = True
-                            time.sleep(2)
+                            time.sleep(_SCRAPE_AFTER_CLICK)
                             break
                     except Exception:
                         continue
@@ -930,7 +946,7 @@ class ScrapeTariff:
 
         try:
             # Wait for fuel type options to appear
-            time.sleep(2)
+            time.sleep(_SCRAPE_AFTER_CLICK)
 
             # Save page state for debugging if step fails (so we can inspect structure)
             def _save_step4_debug():
@@ -979,11 +995,11 @@ class ScrapeTariff:
                     loc = self.page.locator("text=/Gas\\s*&\\s*Electic/i").first
                     if loc.is_visible(timeout=2000):
                         loc.scroll_into_view_if_needed()
-                        time.sleep(0.5)
+                        time.sleep(_SCRAPE_SHORT)
                         loc.click()
                         print("✓ Selected fuel type (text= regex)")
                         fuel_selected = True
-                        time.sleep(2)
+                        time.sleep(_SCRAPE_AFTER_CLICK)
                 except Exception:
                     pass
 
@@ -994,11 +1010,11 @@ class ScrapeTariff:
                         loc = self.page.get_by_text(search_text, exact=False).first
                         if loc.is_visible(timeout=1500):
                             loc.scroll_into_view_if_needed()
-                            time.sleep(0.5)
+                            time.sleep(_SCRAPE_SHORT)
                             loc.click()
                             print(f"✓ Selected fuel type (get_by_text: {search_text!r})")
                             fuel_selected = True
-                            time.sleep(2)
+                            time.sleep(_SCRAPE_AFTER_CLICK)
                             break
                     except Exception:
                         continue
@@ -1028,7 +1044,7 @@ class ScrapeTariff:
                     if clicked:
                         print("✓ Selected fuel type (JS: element containing Gas & Electic)")
                         fuel_selected = True
-                        time.sleep(2)
+                        time.sleep(_SCRAPE_AFTER_CLICK)
                 except Exception as e:
                     print("  JS fallback:", str(e))
 
@@ -1041,11 +1057,11 @@ class ScrapeTariff:
                         ).first
                         if loc.is_visible(timeout=2000):
                             loc.scroll_into_view_if_needed()
-                            time.sleep(0.5)
+                            time.sleep(_SCRAPE_SHORT)
                             loc.click()
                             print("✓ Selected fuel type (regex: Gas & Electic...)")
                             fuel_selected = True
-                            time.sleep(2)
+                            time.sleep(_SCRAPE_AFTER_CLICK)
                             break
                     except Exception:
                         continue
@@ -1070,13 +1086,13 @@ class ScrapeTariff:
                         fuel_btn = self.page.locator(selector).first
                         if fuel_btn.is_visible(timeout=2000):
                             fuel_btn.scroll_into_view_if_needed()
-                            time.sleep(0.5)
+                            time.sleep(_SCRAPE_SHORT)
 
                             # Click the button/label
                             fuel_btn.click()
                             print(f"✓ Selected fuel type '{text}' using: {selector}")
                             fuel_selected = True
-                            time.sleep(2)
+                            time.sleep(_SCRAPE_AFTER_CLICK)
                             break
                     except Exception:
                         continue
@@ -1093,11 +1109,11 @@ class ScrapeTariff:
                         el = self.page.locator(fallback_selector).first
                         if el.is_visible(timeout=2000):
                             el.scroll_into_view_if_needed()
-                            time.sleep(0.5)
+                            time.sleep(_SCRAPE_SHORT)
                             el.click()
                             print(f"✓ Selected fuel type (fallback selector: {fallback_selector})")
                             fuel_selected = True
-                            time.sleep(2)
+                            time.sleep(_SCRAPE_AFTER_CLICK)
                             break
                     except Exception:
                         continue
@@ -1106,11 +1122,11 @@ class ScrapeTariff:
                         combined = self.page.get_by_role("button").filter(has_text=re.compile(r"gas.*electric|electric.*gas", re.I)).first
                         if combined.is_visible(timeout=3000):
                             combined.scroll_into_view_if_needed()
-                            time.sleep(0.5)
+                            time.sleep(_SCRAPE_SHORT)
                             combined.click()
                             print("✓ Selected fuel type (fallback: button containing 'gas' and 'electric')")
                             fuel_selected = True
-                            time.sleep(2)
+                            time.sleep(_SCRAPE_AFTER_CLICK)
                     except Exception:
                         pass
                 if not fuel_selected:
@@ -1118,11 +1134,11 @@ class ScrapeTariff:
                         combined = self.page.locator("a").filter(has_text=re.compile(r"gas.*electric|electric.*gas", re.I)).first
                         if combined.is_visible(timeout=3000):
                             combined.scroll_into_view_if_needed()
-                            time.sleep(0.5)
+                            time.sleep(_SCRAPE_SHORT)
                             combined.click()
                             print("✓ Selected fuel type (fallback: link containing 'gas' and 'electric')")
                             fuel_selected = True
-                            time.sleep(2)
+                            time.sleep(_SCRAPE_AFTER_CLICK)
                     except Exception:
                         pass
 
@@ -1132,7 +1148,7 @@ class ScrapeTariff:
                 raise Exception(f"Could not find fuel type option for: {fuel_type}")
 
             # Look for continue button
-            time.sleep(1)
+            time.sleep(_SCRAPE_PRE_CLICK)
             continue_selectors = [
                 "button:has-text('Continue')",
                 "button:has-text('Next')",
@@ -1145,14 +1161,14 @@ class ScrapeTariff:
                     continue_btn = self.page.locator(selector).first
                     if continue_btn.is_visible(timeout=2000):
                         continue_btn.scroll_into_view_if_needed()
-                        time.sleep(0.5)
+                        time.sleep(_SCRAPE_SHORT)
                         continue_btn.click()
                         print(f"✓ Clicked continue button")
                         break
                 except:
                     continue
 
-            time.sleep(3)
+            time.sleep(_SCRAPE_AFTER_SUBMIT)
             print("✓ Step 4 complete")
 
         except Exception as e:
@@ -1167,7 +1183,7 @@ class ScrapeTariff:
 
         try:
             # Wait for EV options to appear
-            time.sleep(2)
+            time.sleep(_SCRAPE_AFTER_CLICK)
 
             # Determine which option to select based on has_ev parameter
             # Normalize the input to handle variations
@@ -1207,13 +1223,13 @@ class ScrapeTariff:
                         ev_btn = self.page.locator(selector).first
                         if ev_btn.is_visible(timeout=2000):
                             ev_btn.scroll_into_view_if_needed()
-                            time.sleep(0.5)
+                            time.sleep(_SCRAPE_SHORT)
 
                             # Click the button/label
                             ev_btn.click()
                             print(f"✓ Selected EV option '{text}' using: {selector}")
                             ev_selected = True
-                            time.sleep(2)
+                            time.sleep(_SCRAPE_AFTER_CLICK)
                             break
                     except:
                         continue
@@ -1234,11 +1250,11 @@ class ScrapeTariff:
                             no_btn = self.page.locator(selector).first
                             if no_btn.is_visible(timeout=2000):
                                 no_btn.scroll_into_view_if_needed()
-                                time.sleep(0.5)
+                                time.sleep(_SCRAPE_SHORT)
                                 no_btn.click()
                                 print(f"✓ Selected '{text}' as fallback")
                                 ev_selected = True
-                                time.sleep(2)
+                                time.sleep(_SCRAPE_AFTER_CLICK)
                                 break
                         except:
                             continue
@@ -1253,7 +1269,7 @@ class ScrapeTariff:
                 return
 
             # Look for continue button
-            time.sleep(1)
+            time.sleep(_SCRAPE_PRE_CLICK)
             continue_selectors = [
                 "button:has-text('Continue')",
                 "button:has-text('Next')",
@@ -1269,7 +1285,7 @@ class ScrapeTariff:
                     continue_btn = self.page.locator(selector).first
                     if continue_btn.is_visible(timeout=2000):
                         continue_btn.scroll_into_view_if_needed()
-                        time.sleep(0.5)
+                        time.sleep(_SCRAPE_SHORT)
                         continue_btn.click()
                         print(f"✓ Clicked continue button")
                         continue_clicked = True
@@ -1280,7 +1296,7 @@ class ScrapeTariff:
             if not continue_clicked:
                 print("⚠ No continue button found - may auto-proceed")
 
-            time.sleep(3)
+            time.sleep(_SCRAPE_AFTER_SUBMIT)
             print("✓ Step 5 complete")
 
         except Exception as e:
@@ -1310,7 +1326,7 @@ class ScrapeTariff:
                         results_btn.click()
                         print(f"✓ Clicked results button using: {selector}")
                         results_handled = True
-                        time.sleep(2)
+                        time.sleep(_SCRAPE_AFTER_CLICK)
                         break
                 except:
                     continue
