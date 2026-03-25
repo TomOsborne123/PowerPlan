@@ -2,11 +2,17 @@ import { useState, useEffect, useRef } from 'react'
 import { usePostcodeLookup, fetchRecommend, fetchScrapeResults, fetchRunScrape, fetchScrapeStatus } from './api'
 import { ResultView } from './ResultView'
 import { ScrapeGlobe } from './ScrapeGlobe'
+import { CesiumFlyTo } from './CesiumFlyTo'
+import { InfoIcon } from './InfoIcon'
 
 export function App() {
   const [postcode, setPostcode] = useState('')
   const [latitude, setLatitude] = useState(null)
   const [longitude, setLongitude] = useState(null)
+  const [postcodeDistrict, setPostcodeDistrict] = useState('')
+  // Controls the single-screen "step" experience:
+  // 1) Postcode input, 2) Scraping globe, 3) Optimiser inputs, 4) Graph + tariffs
+  const [uiStep, setUiStep] = useState(1)
   const [annualConsumptionKwh, setAnnualConsumptionKwh] = useState('')
   const [scrapeLoaded, setScrapeLoaded] = useState(false)
   const [scrapeTariffCount, setScrapeTariffCount] = useState(null)
@@ -27,6 +33,7 @@ export function App() {
   const [exportPricePct, setExportPricePct] = useState(0)
   const [globeSpinning, setGlobeSpinning] = useState(false)
   const [globeLanded, setGlobeLanded] = useState(false)
+  const [globeVisualReady, setGlobeVisualReady] = useState(false)
 
   const [postcodeStatus, lookupPostcode] = usePostcodeLookup(setLatitude, setLongitude)
   const [loading, setLoading] = useState(false)
@@ -35,12 +42,9 @@ export function App() {
   const [result, setResult] = useState(null)
   const debounceRef = useRef(null)
   const requestSeqRef = useRef(0)
+  const stepAdvanceTimerRef = useRef(null)
 
-  useEffect(() => {
-    if (scrapeLoaded) {
-      document.getElementById('demand-and-system')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    }
-  }, [scrapeLoaded])
+  // No scrolling: keep the UI within a single view.
 
   const normalizePostcode = (p) => (p || '').toUpperCase().replace(/\s+/g, '')
   const isOutwardOnlyPostcode = (norm) => /^[A-Z]{1,2}\d{1,2}[A-Z]?$/.test(norm)
@@ -58,16 +62,14 @@ export function App() {
     }
     const geocodable = isFullPostcode(norm)
     if (triggeredByEnter) {
+      if (stepAdvanceTimerRef.current) {
+        window.clearTimeout(stepAdvanceTimerRef.current)
+        stepAdvanceTimerRef.current = null
+      }
       setGlobeLanded(false)
       setGlobeSpinning(true)
-    }
-    // Immediately resolve postcode coordinates (when available) so the globe can pin location right away.
-    if (geocodable) {
-      try {
-        await lookupPostcode(norm)
-      } catch {
-        // Non-fatal: scrape flow can still continue and may provide coordinates later.
-      }
+      setGlobeVisualReady(false)
+      setUiStep(2)
     }
     setError(null)
     setLoading(true)
@@ -88,10 +90,29 @@ export function App() {
         if (triggeredByEnter) {
           setGlobeSpinning(false)
           setGlobeLanded(true)
+          // Let the globe "land/zoom" animation play before advancing.
+          stepAdvanceTimerRef.current = window.setTimeout(() => {
+            setUiStep(3)
+            stepAdvanceTimerRef.current = null
+          }, 650)
         }
         return true
       }
       // No saved scrape or data older than 1 week: run scrape from the app, then load
+      if (geocodable) {
+        const geo = await lookupPostcode(norm)
+        const ok = geo && Number.isFinite(geo.latitude) && Number.isFinite(geo.longitude)
+        if (!ok) {
+          setError('invalid postcode, try again')
+          if (triggeredByEnter) {
+            setGlobeSpinning(false)
+            setGlobeLanded(false)
+            setUiStep(1)
+          }
+          return false
+        }
+        setPostcodeDistrict(geo?.district || geo?.region || '')
+      }
       setScraping(true)
       try {
         await fetchRunScrape(norm, homeOrBusiness)
@@ -123,6 +144,11 @@ export function App() {
             if (triggeredByEnter) {
               setGlobeSpinning(false)
               setGlobeLanded(true)
+              // Let the globe "land/zoom" animation play before advancing.
+              stepAdvanceTimerRef.current = window.setTimeout(() => {
+                setUiStep(3)
+                stepAdvanceTimerRef.current = null
+              }, 650)
             }
           }
           break
@@ -132,6 +158,7 @@ export function App() {
           if (triggeredByEnter) {
             setGlobeSpinning(false)
             setGlobeLanded(false)
+            setUiStep(1)
           }
           break
         }
@@ -142,6 +169,7 @@ export function App() {
         if (triggeredByEnter) {
           setGlobeSpinning(false)
           setGlobeLanded(false)
+          setUiStep(1)
         }
       }
       return success
@@ -150,12 +178,45 @@ export function App() {
       if (triggeredByEnter) {
         setGlobeSpinning(false)
         setGlobeLanded(false)
+        setUiStep(1)
       }
       return false
     } finally {
       setLoading(false)
       setScraping(false)
     }
+  }
+
+  const canNavigate = !(loading || scraping || refreshing)
+
+  const stepAvailable = (step) => {
+    if (step === 1) return true
+    if (step === 2) return scraping || uiStep === 2
+    if (step === 3) return scrapeLoaded
+    if (step === 4) return Boolean(result)
+    return false
+  }
+
+  const goToStep = (step) => {
+    if (!canNavigate) return
+    if (!stepAvailable(step)) return
+
+    if (step === 1) {
+      setGlobeSpinning(false)
+      setGlobeLanded(false)
+      setUiStep(1)
+      return
+    }
+    if (step === 3) {
+      setUiStep(3)
+      return
+    }
+    if (step === 4) {
+      setUiStep(4)
+      return
+    }
+    // step 2: only enable while scraping/loading is active
+    setUiStep(2)
   }
 
   const runRecommendation = async ({ ensureScrape = false, clearPreviousResult = false, showErrors = true, background = false } = {}) => {
@@ -187,6 +248,12 @@ export function App() {
       }
       const solarMaxKw = Math.max(0, 20 * (1 + solarCapacityPct / 100))
       const windMaxKw = Math.max(0, 10 * (1 + windCapacityPct / 100))
+      // Also scale the *minimum* capacities so the sliders reliably affect the optimiser result.
+      // Without this, changing only the max bounds often doesn't move the optimal solution.
+      const solarMinKwBase = 1.5 * (1 + solarCapacityPct / 100)
+      const windMinKwBase = 0.5 * (1 + windCapacityPct / 100)
+      const solarMinKw = Math.max(0, Math.min(solarMaxKw, solarMinKwBase))
+      const windMinKw = Math.max(0, Math.min(windMaxKw, windMinKwBase))
       const exportPrice = Math.max(0, exportPricePerKwh * (1 + exportPricePct / 100))
       const data = await fetchRecommend({
         postcode: norm,
@@ -202,11 +269,14 @@ export function App() {
         export_price_per_kwh: exportPrice,
         solar_max_kw: solarMaxKw,
         wind_max_kw: windMaxKw,
+        min_solar_kw: solarMinKw,
+        min_wind_kw: windMinKw,
         optimize_over_years: optimizeOverYears,
         prefer_green: preferGreen,
       })
       if (reqId !== requestSeqRef.current) return false
       setResult(data)
+      setUiStep(4)
       return true
     } catch (err) {
       if (reqId !== requestSeqRef.current) return false
@@ -230,18 +300,17 @@ export function App() {
 
   const handleSubmit = async (e) => {
     e.preventDefault()
-    const ok = await runRecommendation({ ensureScrape: true, clearPreviousResult: true, showErrors: true })
-    if (ok) {
-      document.getElementById('results')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
-    }
+    await runRecommendation({ ensureScrape: true, clearPreviousResult: true, showErrors: true })
   }
 
   // Live-update optimisation output when sliders/inputs change after initial result is shown.
   useEffect(() => {
+    if (uiStep !== 4) return
     if (!scrapeLoaded || !result || loading || scraping || refreshing) return
     if (debounceRef.current) window.clearTimeout(debounceRef.current)
     debounceRef.current = window.setTimeout(() => {
-      runRecommendation({ ensureScrape: false, clearPreviousResult: false, showErrors: false, background: true })
+      // Show errors for background updates so "nothing changes" doesn't fail silently.
+      runRecommendation({ ensureScrape: false, clearPreviousResult: false, showErrors: true, background: true })
     }, 350)
     return () => {
       if (debounceRef.current) window.clearTimeout(debounceRef.current)
@@ -261,304 +330,32 @@ export function App() {
     preferGreen,
     annualConsumptionKwh,
     scrapeLoaded,
-    loading,
-    scraping,
-    refreshing,
+    uiStep,
   ])
 
   return (
     <div className="wrap">
-      <h1>PowerPlan</h1>
-      <p className="tagline">Recommend energy technologies and tariffs from your location and usage. Enter your postcode and use data from your saved tariff scrape.</p>
-
-      {(loading || scraping) && (
-        <div className="scrape-loading scrape-loading-global" role="status" aria-live="polite">
-          <p className="scrape-loading-label">
-            {scraping ? 'Fetching tariff data… This usually takes 1–2 minutes.' : 'Loading…'}
-          </p>
-          {scraping && (
-            <div className="scrape-globe-wrap">
-              <div className="scrape-globe">
-                <ScrapeGlobe latitude={latitude} longitude={longitude} spinning={globeSpinning && !globeLanded} />
-              </div>
-              <div className="hint">
-                {hasCoords
-                  ? `Pinpointing your location at ${Number(latitude).toFixed(3)}, ${Number(longitude).toFixed(3)} while scraping…`
-                  : 'Pinpoint animation will appear once location coordinates are available…'}
-              </div>
-            </div>
-          )}
-          <div className="scrape-progress" aria-hidden="true">
-            <div className="scrape-progress-bar" />
-          </div>
-        </div>
-      )}
-
-      <form onSubmit={handleSubmit} className="card">
-        <h2>Location & usage</h2>
-        <div className="form-row col2">
-          <div>
-            <label htmlFor="postcode">UK postcode</label>
-            <input
-              type="text"
-              id="postcode"
-              value={postcode}
-              onChange={(e) => {
-                setPostcode(e.target.value)
-                setScrapeLoaded(false)
-                setScrapeTariffCount(null)
-                setScrapeTariffs([])
-                setScraping(false)
-                setGlobeSpinning(false)
-                setGlobeLanded(false)
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault()
-                  loadFromScrape(true)
-                }
-              }}
-              onBlur={() => {
-                if (postcodeGeocodable) lookupPostcode(normalizedPostcode)
-              }}
-              placeholder="e.g. BS1 1AA"
-              autoComplete="off"
-            />
-            {postcodeStatus.message && (
-              <div className={`postcode-status ${postcodeStatus.ok === true ? 'ok' : postcodeStatus.ok === false ? 'err' : ''}`}>
-                {postcodeStatus.message}
-              </div>
-            )}
-            <div className="hint">Location and weather are derived from this via the API. Press Enter to load tariff data (from database or run a new scrape).</div>
-          </div>
-          <div>
-            <label htmlFor="annual_consumption_kwh">Annual electricity use (kWh)</label>
-            <input
-              type="text"
-              id="annual_consumption_kwh"
-              value={annualConsumptionKwh}
-              onChange={(e) => setAnnualConsumptionKwh(e.target.value)}
-              inputMode="decimal"
-              spellCheck={false}
-              placeholder="Optional – any value, e.g. 3527.5"
-            />
-            <div className="hint">Optional. Leave blank to use usage from your saved scrape. Any decimal value is accepted.</div>
-          </div>
-        </div>
-        {postcodeInputValid && (
-          <>
-          <div className="form-row">
-            <div>
-              <label className="block-label">Is this for a home or business?</label>
-              <div className="radio-group" role="group" aria-label="Home or business">
-                <label className="radio-label">
-                  <input
-                    type="radio"
-                    name="home_or_business"
-                    value="home"
-                    checked={homeOrBusiness === 'home'}
-                    onChange={() => setHomeOrBusiness('home')}
-                  />
-                  <span>No, it&apos;s a home</span>
-                </label>
-                <label className="radio-label">
-                  <input
-                    type="radio"
-                    name="home_or_business"
-                    value="business"
-                    checked={homeOrBusiness === 'business'}
-                    onChange={() => setHomeOrBusiness('business')}
-                  />
-                  <span>Yes, it&apos;s a business</span>
-                </label>
-              </div>
-              <div className="hint">Used when fetching tariffs so we select the right option on the comparison site.</div>
-            </div>
-          </div>
-          <div className="form-row">
-            <button type="button" className="btn" onClick={() => loadFromScrape(true)} disabled={loading}>
-              {scraping ? 'Scraping… (1–2 min)' : loading ? 'Loading…' : 'Load usage & tariffs from scrape'}
-            </button>
-            {scrapeLoaded && (
-              <span className="hint" style={{ marginLeft: '0.5rem', color: 'var(--accent)' }}>
-                Using {scrapeTariffCount} tariffs from your saved scrape
-              </span>
-            )}
-          </div>
-          </>
-        )}
-        {!scrapeLoaded && postcodeInputValid && (
-          <p className="hint" style={{ marginTop: '0.5rem' }}>
-            Click &quot;Load usage & tariffs from scrape&quot; above. Tariffs will load from saved data or the scraper will run for this postcode. Demand and system options will appear next.
-          </p>
-        )}
-        {scrapeLoaded && (
-          <>
-            <div id="demand-and-system">
-            <h2 style={{ marginTop: '0.65rem' }}>Demand adjustment</h2>
-            <div className="form-row col3">
-          <div>
-            <label htmlFor="heating_fraction">Heating fraction (0–1)</label>
-            <input
-              type="number"
-              id="heating_fraction"
-              value={heatingFraction}
-              onChange={(e) => setHeatingFraction(Number(e.target.value))}
-              min={0}
-              max={1}
-              step={0.1}
-            />
-            <div className="hint">Share of demand that is space heating</div>
-          </div>
-          <div>
-            <label htmlFor="insulation_r_value">Insulation R-value</label>
-            <input
-              type="number"
-              id="insulation_r_value"
-              value={insulationRValue}
-              onChange={(e) => setInsulationRValue(Number(e.target.value))}
-              min={0}
-              step={0.5}
-            />
-            <div className="hint">0 = none; e.g. 5 for well insulated</div>
-          </div>
-          <div>
-            <label htmlFor="heat_pump_cop">Heat pump COP</label>
-            <select
-              id="heat_pump_cop"
-              value={heatPumpCop}
-              onChange={(e) => setHeatPumpCop(Number(e.target.value))}
-            >
-              <option value={1}>1 (electric heating)</option>
-              <option value={2.5}>2.5 (standard ASHP)</option>
-              <option value={3.5}>3.5 (efficient ASHP)</option>
-            </select>
-          </div>
-        </div>
-
-        <h2 style={{ marginTop: '0.65rem' }}>System</h2>
-        <div className="form-row col2">
-          <div>
-            <label htmlFor="solar_tier">Solar tier</label>
-            <select id="solar_tier" value={solarTier} onChange={(e) => setSolarTier(e.target.value)}>
-              <option value="budget">Budget</option>
-              <option value="mid">Mid</option>
-              <option value="premium">Premium</option>
-            </select>
-          </div>
-          <div>
-            <label htmlFor="wind_tier">Wind tier</label>
-            <select id="wind_tier" value={windTier} onChange={(e) => setWindTier(e.target.value)}>
-              <option value="budget">Budget</option>
-              <option value="mid">Mid</option>
-              <option value="premium">Premium</option>
-            </select>
-          </div>
-        </div>
-        <div className="form-row col3" style={{ marginTop: '0.5rem' }}>
-          <div>
-            <label htmlFor="export_price_per_kwh">Export price (£/kWh)</label>
-            <input
-              type="number"
-              id="export_price_per_kwh"
-              value={exportPricePerKwh}
-              onChange={(e) => setExportPricePerKwh(Number(e.target.value))}
-              step={0.01}
-              min={0}
-            />
-          </div>
-          <div>
-            <label htmlFor="optimize_over_years">Optimise over (years)</label>
-            <input
-              type="number"
-              id="optimize_over_years"
-              value={optimizeOverYears}
-              onChange={(e) => setOptimizeOverYears(Number(e.target.value))}
-              min={1}
-              max={20}
-              step={1}
-            />
-          </div>
-          <div style={{ display: 'flex', alignItems: 'flex-end' }}>
-            <label className="checkbox-label">
-              <input
-                type="checkbox"
-                checked={preferGreen}
-                onChange={(e) => setPreferGreen(e.target.checked)}
+      <div className="top-row">
+        <h1>PowerPlan</h1>
+        <div className="step-dots" aria-label="Page navigation (steps)">
+          {[1, 2, 3, 4].map((s) => {
+            const enabled = stepAvailable(s)
+            const active = uiStep === s
+            return (
+              <button
+                key={s}
+                type="button"
+                className={`step-dot ${active ? 'active' : ''} ${enabled ? '' : 'disabled'}`}
+                onClick={() => goToStep(s)}
+                disabled={!canNavigate || !enabled}
+                aria-current={active ? 'page' : undefined}
+                aria-label={`Go to step ${s}`}
+                title={`Step ${s}`}
               />
-              Prefer green tariffs
-            </label>
-          </div>
+            )
+          })}
         </div>
-        <h2 style={{ marginTop: '0.65rem' }}>Sensitivity sliders (±300%, step 50%)</h2>
-        <div className="form-row col2">
-          <div>
-            <label htmlFor="solar_capacity_pct">Solar capacity range adjustment: {solarCapacityPct}%</label>
-            <input
-              type="range"
-              id="solar_capacity_pct"
-              min={-300}
-              max={300}
-              step={50}
-              value={solarCapacityPct}
-              onChange={(e) => setSolarCapacityPct(Number(e.target.value))}
-            />
-            <div className="hint">Applies to optimiser solar max kW (base 20 kW).</div>
-          </div>
-          <div>
-            <label htmlFor="wind_capacity_pct">Wind capacity range adjustment: {windCapacityPct}%</label>
-            <input
-              type="range"
-              id="wind_capacity_pct"
-              min={-300}
-              max={300}
-              step={50}
-              value={windCapacityPct}
-              onChange={(e) => setWindCapacityPct(Number(e.target.value))}
-            />
-            <div className="hint">Applies to optimiser wind max kW (base 10 kW).</div>
-          </div>
-        </div>
-        <div className="form-row col2">
-          <div>
-            <label htmlFor="demand_pct">Demand adjustment: {demandPct}%</label>
-            <input
-              type="range"
-              id="demand_pct"
-              min={-300}
-              max={300}
-              step={50}
-              value={demandPct}
-              onChange={(e) => setDemandPct(Number(e.target.value))}
-            />
-            <div className="hint">Scales annual electricity use before optimisation.</div>
-          </div>
-          <div>
-            <label htmlFor="export_price_pct">Export price adjustment: {exportPricePct}%</label>
-            <input
-              type="range"
-              id="export_price_pct"
-              min={-300}
-              max={300}
-              step={50}
-              value={exportPricePct}
-              onChange={(e) => setExportPricePct(Number(e.target.value))}
-            />
-            <div className="hint">Scales export price before optimisation.</div>
-          </div>
-        </div>
-        <p className="hint" style={{ marginTop: '0.25rem' }}>
-          The optimiser evaluates combinations of solar and wind capacities within these adjusted ranges.
-        </p>
-        <div style={{ marginTop: '0.6rem' }}>
-          <button type="submit" className="btn btn-block" disabled={loading}>
-            {loading ? 'Calculating…' : 'Get recommendation'}
-          </button>
-        </div>
-            </div>
-          </>
-        )}
-      </form>
+      </div>
 
       {error && (
         <div className="error-msg" role="alert">
@@ -566,9 +363,448 @@ export function App() {
         </div>
       )}
 
-      {result && (
+      {uiStep === 2 && (
+        <div className="scrape-loading scrape-loading-global" role="status" aria-live="polite">
+          <p className="scrape-loading-label">{scraping ? 'Fetching tariff data…' : 'Loading…'}</p>
+          <div className="scrape-globe-wrap">
+            <div className="scrape-globe">
+              <ScrapeGlobe latitude={latitude} longitude={longitude} spinning={globeSpinning && !globeLanded} />
+            </div>
+            <div className={`scrape-globe scrape-globe-cesium-wrap ${globeVisualReady ? 'ready' : 'loading'}`}>
+              <CesiumFlyTo
+                latitude={latitude}
+                longitude={longitude}
+                active={globeLanded || globeSpinning}
+                onReady={() => setGlobeVisualReady(true)}
+              />
+            </div>
+          </div>
+          <div className="hint">{postcodeDistrict ? `District: ${postcodeDistrict}` : 'District: locating…'}</div>
+          <div className="scrape-progress" aria-hidden="true">
+            <div className="scrape-progress-bar" />
+          </div>
+        </div>
+      )}
+
+      {uiStep === 1 && (
+        <form onSubmit={(e) => { e.preventDefault(); loadFromScrape(true) }} className="card">
+          <h2>Postcode</h2>
+          <div className="form-row col2">
+            <div>
+              <label htmlFor="postcode">
+                UK postcode
+                <InfoIcon text="Used to fetch saved tariffs and weather/flux data for your location." />
+              </label>
+              <input
+                type="text"
+                id="postcode"
+                value={postcode}
+                onChange={(e) => {
+                  setPostcode(e.target.value)
+                  setPostcodeDistrict('')
+                  // Each postcode has its own saved usage; prevent carry-over from the previous postcode.
+                  setAnnualConsumptionKwh('')
+                  setUiStep(1)
+                  setResult(null)
+                  setScrapeLoaded(false)
+                  setScrapeTariffCount(null)
+                  setScrapeTariffs([])
+                  setScraping(false)
+                  setGlobeSpinning(false)
+                  setGlobeLanded(false)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    loadFromScrape(true)
+                  }
+                }}
+                onBlur={() => {
+                  if (postcodeGeocodable) lookupPostcode(normalizedPostcode)
+                }}
+                placeholder="e.g. BS1 1AA"
+                autoComplete="off"
+              />
+              {postcodeStatus.message && (
+                <div className={`postcode-status ${postcodeStatus.ok === true ? 'ok' : postcodeStatus.ok === false ? 'err' : ''}`}>
+                  {postcodeStatus.message}
+                </div>
+              )}
+            </div>
+            <div>
+              <label htmlFor="annual_consumption_kwh">
+                Annual electricity use (kWh)
+                <InfoIcon text="Your baseline annual electricity demand (before insulation/heat pump adjustments)." />
+              </label>
+              <input
+                type="text"
+                id="annual_consumption_kwh"
+                value={annualConsumptionKwh}
+                onChange={(e) => setAnnualConsumptionKwh(e.target.value)}
+                inputMode="decimal"
+                spellCheck={false}
+                placeholder="Optional"
+              />
+            </div>
+          </div>
+
+          {postcodeInputValid && (
+            <>
+              <div className="form-row">
+                <div>
+                  <label className="block-label">
+                    Home or business
+                    <InfoIcon text="Choose which fuel/account type to compare when scraping tariffs." />
+                  </label>
+                  <div className="radio-group" role="group" aria-label="Home or business">
+                    <label className="radio-label">
+                      <input
+                        type="radio"
+                        name="home_or_business"
+                        value="home"
+                        checked={homeOrBusiness === 'home'}
+                        onChange={() => setHomeOrBusiness('home')}
+                      />
+                      <span>No, it&apos;s a home</span>
+                    </label>
+                    <label className="radio-label">
+                      <input
+                        type="radio"
+                        name="home_or_business"
+                        value="business"
+                        checked={homeOrBusiness === 'business'}
+                        onChange={() => setHomeOrBusiness('business')}
+                      />
+                      <span>Yes, it&apos;s a business</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              <div className="form-row">
+                <button type="button" className="btn" onClick={() => loadFromScrape(true)} disabled={loading || scraping}>
+                  {scraping || loading ? 'Loading…' : 'Load usage & tariffs'}
+                </button>
+              </div>
+            </>
+          )}
+        </form>
+      )}
+
+      {uiStep === 3 && scrapeLoaded && (
+        <form onSubmit={handleSubmit} className="card">
+          <h2>Optimiser</h2>
+
+          <div className="form-row col3">
+            <div>
+              <label htmlFor="heating_fraction">
+                Heating fraction (0–1)
+                <InfoIcon text="Share of your annual electricity demand that relates to space heating." />
+              </label>
+              <input
+                type="number"
+                id="heating_fraction"
+                value={heatingFraction}
+                onChange={(e) => setHeatingFraction(Number(e.target.value))}
+                min={0}
+                max={1}
+                step={0.1}
+              />
+            </div>
+            <div>
+              <label htmlFor="insulation_r_value">
+                Insulation R-value
+                <InfoIcon text="Higher values reduce heating demand before sizing solar/wind." />
+              </label>
+              <input
+                type="number"
+                id="insulation_r_value"
+                value={insulationRValue}
+                onChange={(e) => setInsulationRValue(Number(e.target.value))}
+                min={0}
+                step={0.5}
+              />
+            </div>
+            <div>
+              <label htmlFor="heat_pump_cop">
+                Heat pump COP
+                <InfoIcon text="Coefficient of performance: higher COP means less electricity for the same heat." />
+              </label>
+              <select
+                id="heat_pump_cop"
+                value={heatPumpCop}
+                onChange={(e) => setHeatPumpCop(Number(e.target.value))}
+              >
+                <option value={1}>1</option>
+                <option value={2.5}>2.5</option>
+                <option value={3.5}>3.5</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="form-row col2">
+            <div>
+              <label htmlFor="solar_tier">
+                Solar tier
+                <InfoIcon text="Selects the solar hardware cost/performance assumptions for optimisation." />
+              </label>
+              <select id="solar_tier" value={solarTier} onChange={(e) => setSolarTier(e.target.value)}>
+                <option value="budget">Budget</option>
+                <option value="mid">Mid</option>
+                <option value="premium">Premium</option>
+              </select>
+            </div>
+            <div>
+              <label htmlFor="wind_tier">
+                Wind tier
+                <InfoIcon text="Selects the wind hardware cost/performance assumptions for optimisation." />
+              </label>
+              <select id="wind_tier" value={windTier} onChange={(e) => setWindTier(e.target.value)}>
+                <option value="budget">Budget</option>
+                <option value="mid">Mid</option>
+                <option value="premium">Premium</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="form-row col3" style={{ marginTop: '0.4rem' }}>
+            <div>
+              <label htmlFor="export_price_per_kwh">
+                Export price (£/kWh)
+                <InfoIcon text="Revenue per kWh exported to the grid; improves payback when solar/wind exceed demand." />
+              </label>
+              <input
+                type="number"
+                id="export_price_per_kwh"
+                value={exportPricePerKwh}
+                onChange={(e) => setExportPricePerKwh(Number(e.target.value))}
+                step={0.01}
+                min={0}
+              />
+            </div>
+            <div>
+              <label htmlFor="optimize_over_years">
+                Optimise over (years)
+                <InfoIcon text="Time horizon used when scoring tariffs (capex + grid costs over N years)." />
+              </label>
+              <input
+                type="number"
+                id="optimize_over_years"
+                value={optimizeOverYears}
+                onChange={(e) => setOptimizeOverYears(Number(e.target.value))}
+                min={1}
+                max={20}
+                step={1}
+              />
+            </div>
+            <div style={{ display: 'flex', alignItems: 'flex-end' }}>
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={preferGreen}
+                  onChange={(e) => setPreferGreen(e.target.checked)}
+                />
+                Prefer green
+                <InfoIcon text="If your cheapest tariffs are within ~2%, prefer options marked as green." />
+              </label>
+            </div>
+          </div>
+
+          <div className="form-row col2" style={{ marginTop: '0.4rem' }}>
+            <div>
+              <label htmlFor="solar_capacity_pct">
+                Solar range: {solarCapacityPct}%
+                <InfoIcon text="Adjusts the optimiser's solar capacity search bounds around the base 20 kW." />
+              </label>
+              <input
+                type="range"
+                id="solar_capacity_pct"
+                min={-300}
+                max={300}
+                step={50}
+                value={solarCapacityPct}
+                onChange={(e) => setSolarCapacityPct(Number(e.target.value))}
+              />
+            </div>
+            <div>
+              <label htmlFor="wind_capacity_pct">
+                Wind range: {windCapacityPct}%
+                <InfoIcon text="Adjusts the optimiser's wind capacity search bounds around the base 10 kW." />
+              </label>
+              <input
+                type="range"
+                id="wind_capacity_pct"
+                min={-300}
+                max={300}
+                step={50}
+                value={windCapacityPct}
+                onChange={(e) => setWindCapacityPct(Number(e.target.value))}
+              />
+            </div>
+          </div>
+
+          <div className="form-row col2" style={{ marginTop: '0.2rem' }}>
+            <div>
+              <label htmlFor="demand_pct">
+                Demand: {demandPct}%
+                <InfoIcon text="Scales your baseline annual electricity demand before optimisation." />
+              </label>
+              <input
+                type="range"
+                id="demand_pct"
+                min={-300}
+                max={300}
+                step={50}
+                value={demandPct}
+                onChange={(e) => setDemandPct(Number(e.target.value))}
+              />
+            </div>
+            <div>
+              <label htmlFor="export_price_pct">Export price: {exportPricePct}%</label>
+              <input
+                type="range"
+                id="export_price_pct"
+                min={-300}
+                max={300}
+                step={50}
+                value={exportPricePct}
+                onChange={(e) => setExportPricePct(Number(e.target.value))}
+              />
+            </div>
+          </div>
+
+          <div style={{ marginTop: '0.7rem' }}>
+            <button type="submit" className="btn btn-block" disabled={loading}>
+              {loading ? 'Calculating…' : 'Get recommendation'}
+            </button>
+          </div>
+        </form>
+      )}
+
+      {uiStep === 4 && result && (
         <div id="results">
-          <ResultView result={result} />
+          <div
+            className="updating-graph-indicator"
+            aria-live="polite"
+            style={{ visibility: refreshing ? 'visible' : 'hidden' }}
+          >
+            Updating graph…
+          </div>
+          <ResultView
+            result={result}
+            optimiserControls={
+              <>
+                <div className="form-row col3">
+                  <div>
+                    <label htmlFor="heating_fraction">
+                      Heating {heatingFraction.toFixed(1)}
+                      <InfoIcon text="Share of demand that is space heating." />
+                    </label>
+                    <input
+                      type="number"
+                      id="heating_fraction"
+                      value={heatingFraction}
+                      onChange={(e) => setHeatingFraction(Number(e.target.value))}
+                      min={0}
+                      max={1}
+                      step={0.1}
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="insulation_r_value">
+                      Insulation {insulationRValue}
+                      <InfoIcon text="Insulation strength (R-value) used to reduce heating demand." />
+                    </label>
+                    <input
+                      type="number"
+                      id="insulation_r_value"
+                      value={insulationRValue}
+                      onChange={(e) => setInsulationRValue(Number(e.target.value))}
+                      min={0}
+                      step={0.5}
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="heat_pump_cop">
+                      Heat pump COP (select) {heatPumpCop}
+                      <InfoIcon text="Heat pump coefficient of performance; higher COP reduces electricity demand for heating." />
+                    </label>
+                    <select id="heat_pump_cop" value={heatPumpCop} onChange={(e) => setHeatPumpCop(Number(e.target.value))}>
+                      <option value={1}>1</option>
+                      <option value={2.5}>2.5</option>
+                      <option value={3.5}>3.5</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="form-row col2" style={{ marginTop: '0.35rem' }}>
+                  <div>
+                    <label htmlFor="solar_capacity_pct">
+                      Solar {solarCapacityPct}%
+                      <InfoIcon text="Solar capacity search bound multiplier (around 20 kW base)." />
+                    </label>
+                    <input
+                      type="range"
+                      id="solar_capacity_pct"
+                      min={-300}
+                      max={300}
+                      step={50}
+                      value={solarCapacityPct}
+                      onChange={(e) => setSolarCapacityPct(Number(e.target.value))}
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="wind_capacity_pct">
+                      Wind {windCapacityPct}%
+                      <InfoIcon text="Wind capacity search bound multiplier (around 10 kW base)." />
+                    </label>
+                    <input
+                      type="range"
+                      id="wind_capacity_pct"
+                      min={-300}
+                      max={300}
+                      step={50}
+                      value={windCapacityPct}
+                      onChange={(e) => setWindCapacityPct(Number(e.target.value))}
+                    />
+                  </div>
+                </div>
+
+                <div className="form-row col2" style={{ marginTop: '0.35rem' }}>
+                  <div>
+                    <label htmlFor="demand_pct">
+                      Demand {demandPct}%
+                      <InfoIcon text="Scales baseline annual electricity demand before optimisation." />
+                    </label>
+                    <input
+                      type="range"
+                      id="demand_pct"
+                      min={-300}
+                      max={300}
+                      step={50}
+                      value={demandPct}
+                      onChange={(e) => setDemandPct(Number(e.target.value))}
+                    />
+                  </div>
+                  <div>
+              <label htmlFor="export_price_pct">
+                Export {exportPricePct}%
+                <InfoIcon text="Adjusts the export price used when scoring tariffs." />
+              </label>
+                    <input
+                      type="range"
+                      id="export_price_pct"
+                      min={-300}
+                      max={300}
+                      step={50}
+                      value={exportPricePct}
+                      onChange={(e) => setExportPricePct(Number(e.target.value))}
+                    />
+                  </div>
+                </div>
+              </>
+            }
+          />
         </div>
       )}
     </div>

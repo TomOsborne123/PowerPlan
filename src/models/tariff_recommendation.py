@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from src.models.energy_balancing import get_optimised_system
+from src.models.energy_balancing import get_optimised_system, DEFAULT_PRICING
 
 __all__ = ["recommend_tariff", "tariff_to_pricing_dict"]
 
@@ -55,6 +55,7 @@ def recommend_tariff(
     heat_pump_cop: float = 1.0,
     solar_max_kw: float = 20.0,
     wind_max_kw: float = 10.0,
+    min_solar_kw: float = 0.0,
     min_wind_kw: float = 0.5,
     prefer_green: bool = False,
 ) -> dict[str, Any]:
@@ -76,7 +77,7 @@ def recommend_tariff(
         optimize_over_years: cost horizon in years (default 5).
         flux_source: 'last_year_monthly' or 'forecast' for weather data.
         heating_fraction, insulation_r_value, heat_pump_cop: demand adjustment for optimisation.
-        solar_max_kw, wind_max_kw, min_wind_kw: optimisation search bounds.
+        solar_max_kw, wind_max_kw, min_solar_kw, min_wind_kw: optimisation search bounds.
         prefer_green: if True, among similar-cost tariffs prefer is_green (within 2% of best).
 
     Returns:
@@ -115,9 +116,13 @@ def recommend_tariff(
             "error": "No valid tariff data could be extracted",
         }
 
-    # Use first tariff's unit rate as reference grid price for the single optimisation run
-    ref = pricing_dicts[0]
-    grid_price_ref = ref["unit_rate_p_per_kwh"] / 100.0  # p -> £
+    # Use a tariff unit rate as reference grid price for the single optimisation run.
+    # If scraped data is missing and unit_rate is 0 for the first tariff, the optimiser can pick solar=0.
+    unit_rate_candidates_p = [p.get("unit_rate_p_per_kwh", 0) for p in pricing_dicts if float(p.get("unit_rate_p_per_kwh", 0) or 0) > 0]
+    unit_rate_ref_p = unit_rate_candidates_p[0] if unit_rate_candidates_p else pricing_dicts[0].get("unit_rate_p_per_kwh", 0) or 0
+    grid_price_ref = float(unit_rate_ref_p) / 100.0  # p -> £
+    if grid_price_ref <= 0:
+        grid_price_ref = float(DEFAULT_PRICING.get("grid_price_per_kwh", 0.25))
 
     optimisation_result = get_optimised_system(
         latitude,
@@ -133,6 +138,7 @@ def recommend_tariff(
         wind_max_kw=wind_max_kw,
         optimize_over_years=optimize_over_years,
         flux_source=flux_source,
+        min_solar_kw=min_solar_kw,
         min_wind_kw=min_wind_kw,
         heating_fraction=heating_fraction,
         insulation_r_value=insulation_r_value,

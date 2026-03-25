@@ -12,6 +12,117 @@
   --font-mono: 'JetBrains Mono', monospace;
 }
 
+/* Info tooltip icon (hover: native tooltip via `title`) */
+.info-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  color: var(--text-muted);
+  font-weight: 700;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  margin-left: 0.35rem;
+  cursor: help;
+  vertical-align: middle;
+  user-select: none;
+  position: relative;
+  line-height: 1;
+}
+
+.info-tooltip {
+  display: none;
+  position: absolute;
+  z-index: 20;
+  left: 50%;
+  top: calc(100% + 8px);
+  transform: translateX(-50%);
+  min-width: 160px;
+  max-width: 240px;
+  padding: 0.45rem 0.6rem;
+  background: rgba(22, 27, 34, 0.99);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.4);
+  color: var(--text);
+  font-size: 0.75rem;
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  line-height: 1.25;
+}
+
+.info-icon:hover .info-tooltip,
+.info-icon:focus .info-tooltip {
+  display: block;
+}
+
+.graph-metric-notes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem 0.75rem;
+  margin-bottom: 0.35rem;
+  padding: 0 0.1rem;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.graph-metric-notes .graph-metric {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+/* Recharts hover minimal tooltip */
+.custom-hover-tooltip {
+  background: rgba(22, 27, 34, 0.98);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.35rem 0.5rem;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+
+.custom-hover-title {
+  font-weight: 800;
+}
+
+.custom-hover-value {
+  color: var(--text-muted);
+}
+
+.custom-hover-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  margin-top: 0.25rem;
+}
+
+.custom-hover-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.65rem;
+}
+
+.custom-hover-name {
+  font-weight: 700;
+}
+
+.custom-hover-sep {
+  opacity: 0.7;
+}
+
+/* Used in tiles when label text + icon share the same line */
+.tile-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -48,8 +159,8 @@ h1 {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 0.75rem;
-  margin-bottom: 0.55rem;
+  padding: 0.65rem;
+  margin-bottom: 0.35rem;
 }
 
 .card h2 {
@@ -147,6 +258,42 @@ input::placeholder {
   width: 100%;
 }
 
+.top-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.step-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.step-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.06);
+  padding: 0;
+}
+
+.step-dot.active {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.step-dot.disabled {
+  opacity: 0.35;
+}
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .postcode-status.ok {
   color: var(--accent);
   font-size: 0.85rem;
@@ -194,7 +341,7 @@ input::placeholder {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
   gap: 0.45rem;
-  margin-bottom: 0.45rem;
+  margin-bottom: 0.35rem;
 }
 
 .system-grid {
@@ -275,6 +422,93 @@ input::placeholder {
   }
 }
 
+/* Left/right dashboard layout */
+.dashboard-layout {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 0.4rem;
+  margin-top: 0.05rem;
+}
+
+.dashboard-right {
+  min-width: 0;
+}
+
+.ranking-menu {
+  /* details element wraps styles */
+}
+
+.ranking-menu summary {
+  cursor: pointer;
+  list-style: none;
+  font-weight: 600;
+  color: var(--text-muted);
+  padding: 0;
+}
+
+.ranking-menu summary::-webkit-details-marker {
+  display: none;
+}
+
+.optimiser-menu[open] .optimiser-controls {
+  /* Scaling controls should fit without inner scroll */
+  max-height: none;
+  overflow: visible;
+  overflow-x: hidden;
+}
+
+.optimiser-controls {
+  padding-top: 0.35rem;
+}
+
+.optimiser-controls {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+.optimiser-inline .optimiser-controls {
+  /* When we render controls inline (not inside <details>), don't constrain height */
+  max-height: none;
+  overflow: visible;
+}
+
+/* Keep 2-wide/3-wide rows as intended inside optimiser panel */
+.optimiser-controls .form-row.col2 {
+  grid-template-columns: 1fr 1fr !important;
+}
+
+.optimiser-controls .form-row.col3 {
+  grid-template-columns: 1fr 1fr 1fr !important;
+}
+
+.optimiser-controls .form-row {
+  margin-bottom: 0.25rem;
+  gap: 0.25rem;
+}
+
+.optimiser-controls label {
+  font-size: 0.85rem;
+  margin-bottom: 0.25rem;
+}
+
+.optimiser-controls input,
+.optimiser-controls select {
+  padding: 0.35rem 0.5rem;
+  font-size: 0.85rem;
+}
+
+.updating-graph-indicator {
+  min-height: 1.1rem;
+  margin-bottom: 0.35rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.recommended-tariff-summary .name {
+  font-weight: 650;
+  color: var(--accent);
+}
+
 .ranking-list {
   list-style: none;
   padding: 0;
@@ -282,9 +516,9 @@ input::placeholder {
 }
 
 .ranking-list li {
-  display: flex;
+  display: grid;
+  grid-template-columns: 2rem 1fr 6.4rem 8.3rem;
   align-items: center;
-  justify-content: space-between;
   padding: 0.6rem 0.75rem;
   border-bottom: 1px solid var(--border);
   gap: 1rem;
@@ -303,12 +537,48 @@ input::placeholder {
 .ranking-list .total {
   font-family: var(--font-mono);
   font-weight: 600;
+  text-align: right;
+}
+
+.ranking-list .bill {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  text-align: right;
+  color: var(--text-muted);
 }
 
 .ranking-list li.recommended-row {
-  background: rgba(63, 185, 80, 0.14);
-  border: 1px solid rgba(63, 185, 80, 0.4);
+  background: rgba(63, 185, 80, 0.18);
+  border: 1px solid rgba(63, 185, 80, 0.55);
   border-radius: 8px;
+  box-shadow: 0 0 0 2px rgba(63, 185, 80, 0.12);
+  position: relative;
+}
+
+.ranking-header {
+  /* Header row; shares markup with list rows but shouldn't look like a data row. */
+  border-bottom: 1px solid var(--border);
+  padding-top: 0.45rem;
+  padding-bottom: 0.45rem;
+  background: transparent;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.ranking-header .rank {
+  width: 2rem;
+}
+
+.ranking-list li.recommended-row::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  border-top-left-radius: 8px;
+  border-bottom-left-radius: 8px;
+  background: rgba(63, 185, 80, 0.95);
 }
 
 .error-msg {
@@ -358,16 +628,16 @@ input::placeholder {
 /* Tariff scraping loading bar */
 .scrape-loading {
   margin-top: 1rem;
-  padding: 1.25rem;
+  padding: 0.95rem;
   background: rgba(63, 185, 80, 0.12);
   border: 1px solid rgba(63, 185, 80, 0.35);
   border-radius: var(--radius);
-  min-height: 4rem;
+  min-height: 3.25rem;
 }
 
 .scrape-loading-global {
   margin-top: 0;
-  margin-bottom: 1.25rem;
+  margin-bottom: 0.8rem;
   width: 100%;
 }
 
@@ -380,6 +650,15 @@ input::placeholder {
 
 .scrape-globe-wrap {
   margin: 0 0 0.9rem 0;
+  display: grid;
+  grid-template-columns: 170px 1fr;
+  align-items: center;
+  justify-content: center;
+  gap: 0.9rem;
+  max-width: 860px;
+  margin-left: auto;
+  margin-right: auto;
+  opacity: 1;
 }
 
 .scrape-globe {
@@ -399,6 +678,58 @@ input::placeholder {
 .scrape-globe-amchart {
   width: 100%;
   height: 100%;
+}
+
+.scrape-globe-cesium-wrap {
+  width: 100%;
+  height: 160px;
+  border-radius: 14px;
+  background:
+    radial-gradient(circle at 30% 20%, rgba(59, 130, 246, 0.18), transparent 60%),
+    radial-gradient(circle at 80% 70%, rgba(63, 185, 80, 0.14), transparent 55%),
+    rgba(13, 17, 22, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 240ms ease, transform 240ms ease;
+  pointer-events: none;
+}
+
+.scrape-globe-cesium-wrap.ready {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.scrape-globe-cesium {
+  width: 100%;
+  height: 100%;
+}
+
+/* Cesium adds UI overlays; hide them for the compact panel. */
+.scrape-globe-cesium .cesium-viewer-toolbar,
+.scrape-globe-cesium .cesium-viewer-bottom,
+.scrape-globe-cesium .cesium-viewer-animationContainer,
+.scrape-globe-cesium .cesium-viewer-timelineContainer,
+.scrape-globe-cesium .cesium-viewer-geocoderContainer,
+.scrape-globe-cesium .cesium-viewer-fullscreenContainer {
+  display: none !important;
+}
+
+@media (max-width: 780px) {
+  .scrape-globe-wrap {
+    grid-template-columns: 1fr;
+    gap: 0.6rem;
+    max-width: 420px;
+  }
+  .scrape-globe {
+    width: 170px;
+  }
+  .scrape-globe-cesium-wrap {
+    height: 210px;
+    width: 100%;
+    border-radius: 14px;
+  }
 }
 
 .scrape-globe-map {

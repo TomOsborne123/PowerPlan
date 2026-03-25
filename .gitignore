@@ -33,3 +33,8 @@ output/
 
 # Frontend (in addition to frontend/.gitignore)
 node_modules/
+
+# Built frontend output (Vite build -> src/web/static)
+src/web/static/index.html
+src/web/static/assets/
+src/web/static/cesium/

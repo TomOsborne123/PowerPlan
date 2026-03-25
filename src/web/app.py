@@ -19,6 +19,8 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from flask import Flask, jsonify, request, send_from_directory
 
+from src.db import mysql_config
+
 app = Flask(__name__, static_folder="static", static_url_path="")
 # Resolve static_folder so it works when run from project root
 app.static_folder = os.path.join(os.path.dirname(__file__), "static")
@@ -35,12 +37,7 @@ def _get_scrape_results(postcode: str) -> dict | None:
         return None
     try:
         import mysql.connector
-        conn = mysql.connector.connect(
-            host="localhost",
-            user="root",
-            password="password",
-            database="energy_tariff",
-        )
+        conn = mysql.connector.connect(**mysql_config())
         cursor = conn.cursor(dictionary=True)
         rows = []
         is_outward_only = bool(re.match(r"^[A-Z]{1,2}\d{1,2}[A-Z]?$", postcode_norm))
@@ -79,27 +76,6 @@ def _get_scrape_results(postcode: str) -> dict | None:
                 (postcode_norm, postcode_norm),
             )
             rows = cursor.fetchall()
-
-            # Fallback: if full postcode not found, try outward code bucket from that postcode
-            if not rows:
-                m = re.match(r"^([A-Z]{1,2}\d{1,2}[A-Z]?)", postcode_norm)
-                outward = m.group(1) if m else ""
-                if outward:
-                    cursor.execute(
-                        """
-                        SELECT annual_electricity_kwh, latitude, longitude, search_date,
-                               new_supplier_name, tariff_name, unit_rate, standing_charge, is_green
-                        FROM fact_tariff_search_simple
-                        WHERE UPPER(outward_code) = %s
-                          AND search_date = (
-                            SELECT MAX(search_date) FROM fact_tariff_search_simple
-                            WHERE UPPER(outward_code) = %s
-                          )
-                        ORDER BY new_supplier_name
-                        """,
-                        (outward, outward),
-                    )
-                    rows = cursor.fetchall()
 
         cursor.close()
         conn.close()
@@ -302,6 +278,8 @@ def api_recommend():
         prefer_green = bool(data.get("prefer_green", False))
         solar_max_kw = float(data.get("solar_max_kw", 20.0))
         wind_max_kw = float(data.get("wind_max_kw", 10.0))
+        min_solar_kw = float(data.get("min_solar_kw", 0.0))
+        min_wind_kw = float(data.get("min_wind_kw", 0.5))
     except (TypeError, ValueError) as e:
         return jsonify({"error": f"Invalid input: {e}"}), 400
 
@@ -350,6 +328,8 @@ def api_recommend():
             prefer_green=prefer_green,
             solar_max_kw=max(0.0, solar_max_kw),
             wind_max_kw=max(0.0, wind_max_kw),
+            min_solar_kw=max(0.0, min_solar_kw),
+            min_wind_kw=max(0.0, min_wind_kw),
         )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -369,9 +349,12 @@ def api_recommend():
             "annual_demand_kwh": float(opt["annual_demand_kwh"]),
             "annual_demand_before_adjustments_kwh": float(opt.get("annual_demand_before_adjustments_kwh", opt["annual_demand_kwh"])),
             "heating_demand_after_insulation_kwh": float(opt.get("heating_demand_after_insulation_kwh", 0.0)),
+            "annual_demand_after_insulation_kwh": float(opt.get("annual_demand_after_insulation_kwh", 0.0)),
             "heating_fraction": float(opt.get("heating_fraction", heating_fraction)),
             "insulation_r_value": float(opt.get("insulation_r_value", insulation_r_value)),
             "heat_pump_cop": float(opt.get("heat_pump_cop", heat_pump_cop)),
+            "annual_solar_generation_kwh": float(opt.get("annual_solar_generation_kwh", 0.0)),
+            "annual_wind_generation_kwh": float(opt.get("annual_wind_generation_kwh", 0.0)),
             "annual_generation_kwh": float(opt["annual_generation_kwh"]),
             "annual_import_kwh": float(opt["annual_import_kwh"]),
             "annual_export_kwh": float(opt["annual_export_kwh"]),
@@ -400,6 +383,10 @@ if __name__ == "__main__":
         import time
         time.sleep(1.2)
         webbrowser.open(url)
-    threading.Thread(target=open_browser, daemon=True).start()
+    # When Flask runs with debug=True, Werkzeug's reloader can start the process twice.
+    # Guard the auto-open so Chrome only gets opened once.
+    if os.environ.get("WERKZEUG_RUN_MAIN") in (None, "true", "True", "1"):
+        threading.Thread(target=open_browser, daemon=True).start()
     print(f"Opening {url} in your browser...")
-    app.run(host="0.0.0.0", port=port, debug=True)
+    # Disable the reloader so we don't spawn a second server process.
+    app.run(host="0.0.0.0", port=port, debug=True, use_reloader=False)

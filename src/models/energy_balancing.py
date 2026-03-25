@@ -66,7 +66,8 @@ def demand_after_insulation_and_heat_pump(
     heat_pump_cop: coefficient of performance; 1.0 = electric heating, 2.5–3.5 typical for ASHP.
 
     Returns dict with: annual_demand_before_kwh, heating_demand_after_insulation_kwh,
-    electricity_demand_for_optimisation_kwh (final demand used for sizing solar/wind).
+        annual_demand_after_insulation_kwh (before heat pump COP conversion),
+        electricity_demand_for_optimisation_kwh (final demand used for sizing solar/wind).
     """
     non_heating = annual_consumption_kwh * (1.0 - heating_fraction)
     heating_raw = annual_consumption_kwh * heating_fraction
@@ -78,6 +79,8 @@ def demand_after_insulation_and_heat_pump(
     return {
         "annual_demand_before_kwh": annual_consumption_kwh,
         "heating_demand_after_insulation_kwh": heating_after_insulation,
+        # "Usage adjusted" for display: total after insulation (but before dividing by COP)
+        "annual_demand_after_insulation_kwh": non_heating + heating_after_insulation,
         "electricity_demand_for_optimisation_kwh": demand_for_optimisation,
     }
 
@@ -333,6 +336,7 @@ def optimize_system_capacity(
     min_demand_met_from_gen_pct: float = 50.0,
     min_solar_kw: float = 0.0,
     min_wind_kw: float = 0.5,
+    monthly_demand_kwh: list[float] | None = None,
 ) -> dict[str, Any]:
     """
     Find solar and wind capacity (kW) that minimises total cost over `optimize_over_years`.
@@ -447,8 +451,13 @@ def optimize_system_capacity(
         monthly_solar, monthly_wind = _monthly_generation_breakdown(
             flux, best_solar, best_wind, solar_type_params, wind_type_params
         )
-        # Simple demand split: flat 1/12 of annual (override with monthly_fraction if needed later)
-        monthly_demand = [annual_consumption_kwh / 12.0] * 12
+        # Seasonal demand split for display/plotting only.
+        # If the caller passes a monthly series, scale it to match `annual_consumption_kwh`.
+        if monthly_demand_kwh and len(monthly_demand_kwh) == 12 and sum(monthly_demand_kwh) > 0:
+            scale = annual_consumption_kwh / float(sum(monthly_demand_kwh))
+            monthly_demand = [float(x) * scale for x in monthly_demand_kwh]
+        else:
+            monthly_demand = [annual_consumption_kwh / 12.0] * 12
         monthly_import = [max(0.0, monthly_demand[i] - monthly_solar[i] - monthly_wind[i]) for i in range(12)]
         monthly_export = [max(0.0, monthly_solar[i] + monthly_wind[i] - monthly_demand[i]) for i in range(12)]
         monthly_balance = pd.DataFrame({
@@ -550,6 +559,45 @@ def get_optimised_system(
         heat_pump_cop,
     )
     demand_for_optimisation = demand_adj["electricity_demand_for_optimisation_kwh"]
+
+    def _typical_monthly_profile_weights() -> tuple[list[float], list[float]]:
+        """
+        Return (non_heating_weights, heating_weights) for 12 months.
+
+        - non_heating: fairly flat with mild winter uplift
+        - heating: winter-peaked (captures typical UK space-heating seasonality)
+
+        Both arrays are normalized so each sums to 1.0.
+        """
+        import math
+
+        # winter_factor peaks in January (month 0) and bottoms in July (month 6)
+        winter_factor = [0.5 + 0.5 * math.cos(2.0 * math.pi * (m / 12.0)) for m in range(12)]
+
+        # Sharper winter peak for the heating component.
+        heating_raw = [0.05 + 0.95 * (wf**1.5) for wf in winter_factor]
+        non_heating_raw = [0.08 + 0.12 * wf for wf in winter_factor]
+
+        heating_sum = sum(heating_raw) or 1.0
+        non_heating_sum = sum(non_heating_raw) or 1.0
+
+        heating_w = [x / heating_sum for x in heating_raw]
+        non_heating_w = [x / non_heating_sum for x in non_heating_raw]
+        return non_heating_w, heating_w
+
+    non_heating_weights, heating_weights = _typical_monthly_profile_weights()
+
+    # Split the *optimiser* electricity demand into non-heating and heating components.
+    non_heating_electricity_kwh = annual_consumption_kwh * (1.0 - heating_fraction)
+    heating_after_insulation_kwh = demand_adj["heating_demand_after_insulation_kwh"]
+    cop = max(1.0, float(heat_pump_cop))
+    heating_electricity_kwh = heating_after_insulation_kwh / cop
+
+    # Build a seasonal monthly electricity demand profile for monthly import/export display.
+    monthly_demand_kwh = [
+        (non_heating_electricity_kwh * non_heating_weights[i]) + (heating_electricity_kwh * heating_weights[i])
+        for i in range(12)
+    ]
     if flux_source == "last_year_monthly":
         flux = get_flux_monthly_last_year(latitude, longitude)
         flux_frequency = "monthly"
@@ -578,11 +626,13 @@ def get_optimised_system(
         min_demand_met_from_gen_pct=min_demand_met_from_gen_pct,
         min_solar_kw=min_solar_kw,
         min_wind_kw=min_wind_kw,
+        monthly_demand_kwh=monthly_demand_kwh if flux_frequency == "monthly" else None,
     )
     result["flux_source"] = flux_source
     result["flux_period_days"] = result.pop("period_days")
     result["annual_demand_before_adjustments_kwh"] = round(demand_adj["annual_demand_before_kwh"], 1)
     result["heating_demand_after_insulation_kwh"] = round(demand_adj["heating_demand_after_insulation_kwh"], 1)
+    result["annual_demand_after_insulation_kwh"] = round(demand_adj["annual_demand_after_insulation_kwh"], 1)
     result["heating_fraction"] = heating_fraction
     result["insulation_r_value"] = insulation_r_value
     result["heat_pump_cop"] = heat_pump_cop

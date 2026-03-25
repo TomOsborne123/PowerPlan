@@ -549,36 +549,54 @@ class ScrapeTariff:
 
             print(f"Generated email: {random_email}")
 
-            # Wait for email input to be visible
+            # Give the page a moment to render the email step/field.
+            # Then attempt to locate the email input robustly.
             time.sleep(2)
 
             # Try different selectors for email input
             email_selectors = [
+                # Common explicit email inputs
                 "input[type='email']",
                 "input[name*='email']",
                 "input[id*='email']",
-                "input[placeholder*='email']",
-                "input[placeholder*='Email']",
                 "input[name='email']",
                 "input#email",
+
+                # Often uses type="text" but label/attributes indicate email
+                "input[type='text'][name*='email']",
+                "input[type='text'][id*='email']",
+                "input[autocomplete*='email']",
+                "input[aria-label*='email']",
+                "input[placeholder*='email']",
+                "input[placeholder*='Email']",
+                "input[placeholder*='e-mail']",
+                "input[placeholder*='E-mail']",
+                "input[name*='Email']",
+                "input[id*='Email']",
+                "input[data-testid*='email']",
+                "input[data-testid*='Email']",
             ]
 
             email_entered = False
+            email_input = None
             for selector in email_selectors:
                 try:
-                    email_input = self.page.locator(selector).first
-                    if email_input.is_visible(timeout=3000):
-                        email_input.scroll_into_view_if_needed()
-                        time.sleep(0.5)
+                    candidate = self.page.locator(selector).first
+                    # Wait until attached and visible.
+                    candidate.wait_for(state="visible", timeout=5000)
 
-                        # Clear any existing text and enter email
-                        email_input.click()
-                        email_input.fill(random_email)
+                    candidate.scroll_into_view_if_needed()
+                    time.sleep(0.35)
 
-                        print(f"✓ Entered email using: {selector}")
-                        email_entered = True
-                        time.sleep(1)
-                        break
+                    # Clear any existing text and enter email
+                    candidate.click()
+                    candidate.fill(random_email)
+
+                    email_input = candidate
+                    print(f"✓ Entered email using: {selector}")
+                    email_entered = True
+                    time.sleep(1)
+                    break
                 except Exception as e:
                     continue
 
@@ -619,8 +637,8 @@ class ScrapeTariff:
                 print("⚠ Could not find submit button - may need to press Enter")
                 # Try pressing Enter on the email field
                 try:
-                    email_input = self.page.locator("input[type='email']").first
-                    email_input.press("Enter")
+                    if email_input is not None:
+                        email_input.press("Enter")
                     print("✓ Pressed Enter on email field")
                     time.sleep(3)
                 except:

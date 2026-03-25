@@ -9,6 +9,8 @@ from datetime import datetime
 from typing import Optional
 from contextlib import contextmanager
 
+from src.db import mysql_config
+
 @dataclass
 class Tariff:
     # Tariff details
@@ -51,12 +53,7 @@ class Tariff:
     @contextmanager
     def _get_db_connection(self):
         """Context manager for database connections"""
-        conn = mysql.connector.connect(
-            host="localhost",
-            user="root",
-            password="password",  # Consider using environment variables
-            database="energy_tariff"
-        )
+        conn = mysql.connector.connect(**mysql_config())
         try:
             yield conn
         finally:

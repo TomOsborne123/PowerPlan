@@ -16,7 +16,7 @@ export function usePostcodeLookup(setLatitude, setLongitude) {
     const norm = normalizePostcode(postcode)
     if (!norm || !isFullPostcode(norm)) {
       setStatus({ message: '', ok: null })
-      return
+      return null
     }
     setStatus({ message: 'Looking up…', ok: null })
     try {
@@ -26,16 +26,24 @@ export function usePostcodeLookup(setLatitude, setLongitude) {
         body: JSON.stringify({ postcode: norm }),
       })
       const data = await r.json()
-      if (r.ok && data.latitude != null) {
+      if (r.ok && data.latitude != null && data.longitude != null) {
         setLatitude(data.latitude)
         setLongitude(data.longitude)
         const loc = [data.admin_district, data.region].filter(Boolean).join(' ') || 'Resolved'
         setStatus({ message: loc, ok: true })
+        return {
+          latitude: data.latitude,
+          longitude: data.longitude,
+          district: data.admin_district || '',
+          region: data.region || '',
+        }
       } else {
         setStatus({ message: data.error || 'Could not resolve', ok: false })
+        return null
       }
     } catch {
       setStatus({ message: 'Lookup failed', ok: false })
+      return null
     }
   }, [setLatitude, setLongitude])
 

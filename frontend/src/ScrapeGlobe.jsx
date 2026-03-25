@@ -16,6 +16,16 @@ export function ScrapeGlobe({ latitude, longitude, spinning }) {
     const root = am5.Root.new(containerRef.current)
     rootRef.current = root
 
+    // Remove the default amCharts "logo/credits" overlay.
+    // amCharts attaches it to `root._logo`; disposing it hides the watermark/link.
+    try {
+      if (root && root._logo) {
+        root._logo.dispose()
+      }
+    } catch {
+      // Non-fatal: if internals change, credits may still show but globe will work.
+    }
+
     const chart = root.container.children.push(
       am5map.MapChart.new(root, {
         panX: 'none',
@@ -129,9 +139,9 @@ export function ScrapeGlobe({ latitude, longitude, spinning }) {
 
     if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
       // Land on the user pin and zoom in.
-      chart.animate({ key: 'rotationX', to: -Number(longitude), duration: 900, easing: am5.ease.out(am5.ease.cubic) })
-      chart.animate({ key: 'rotationY', to: Number(latitude), duration: 900, easing: am5.ease.out(am5.ease.cubic) })
-      chart.animate({ key: 'zoomLevel', to: 1.9, duration: 900, easing: am5.ease.out(am5.ease.cubic) })
+      chart.animate({ key: 'rotationX', to: -Number(longitude), duration: 650, easing: am5.ease.out(am5.ease.cubic) })
+      chart.animate({ key: 'rotationY', to: Number(latitude), duration: 650, easing: am5.ease.out(am5.ease.cubic) })
+      chart.animate({ key: 'zoomLevel', to: 1.9, duration: 650, easing: am5.ease.out(am5.ease.cubic) })
     } else {
       // If no coordinates, freeze with default zoom.
       chart.set('zoomLevel', 1)
