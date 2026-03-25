@@ -39,6 +39,7 @@ ENV PORT=5001
 EXPOSE 5001
 
 # Production server (no auto-reloader). Many hosts set PORT at runtime.
-# IMPORTANT: keep workers=1 because scrape job status is stored in-process memory.
-CMD ["sh", "-c", "exec gunicorn -b 0.0.0.0:${PORT:-5001} --workers 1 --threads 4 --timeout 180 src.web.app:app"]
+# IMPORTANT: keep workers=1 and threads=1 because scrape job status is stored in-process memory,
+# and concurrent scraping can easily exhaust limited container resources.
+CMD ["sh", "-c", "exec gunicorn -b 0.0.0.0:${PORT:-5001} --workers 1 --threads 1 --timeout 180 src.web.app:app"]
 

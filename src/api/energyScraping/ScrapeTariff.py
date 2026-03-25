@@ -267,7 +267,7 @@ class ScrapeTariff:
                pay_method: str = 'monthly_direct_debit',
                has_ev: str = 'No',
                home_or_business: str = 'home',
-               headless: bool = False) -> List[Tariff]:
+               headless: bool | str = False) -> List[Tariff]:
 
         url = "https://www.moneysupermarket.com/gas-and-electricity/"
 
@@ -303,6 +303,8 @@ class ScrapeTariff:
             with Camoufox(
                     headless=headless,
                     humanize=False,  # Try disabling humanize
+                    # Extra arguments to improve stability in linux containers.
+                    args=["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"],
             ) as browser:
                 self.browser = browser
                 self.page = browser.new_page()

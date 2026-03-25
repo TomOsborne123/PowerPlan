@@ -46,7 +46,8 @@ def main() -> int:
             pay_method="monthly_direct_debit",
             has_ev="No but interested",
             home_or_business=home_or_business,
-            headless=True,
+            # Camoufox/Playwright can be more stable under linux in Docker with a virtual display.
+            headless="virtual",
         )
         return 0
     except Exception as e:

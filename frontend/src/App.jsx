@@ -123,9 +123,9 @@ export function App() {
         return false
       }
       // Poll until completed or failed.
-      // Backend scrape subprocess has a 5-minute timeout, so give the UI a little headroom.
+      // The backend scrape subprocess timeout is configurable; keep the UI comfortably higher.
       const pollIntervalMs = 5000
-      const maxWaitMs = 330000
+      const maxWaitMs = 660000
       const start = Date.now()
       let success = false
       while (Date.now() - start < maxWaitMs) {
