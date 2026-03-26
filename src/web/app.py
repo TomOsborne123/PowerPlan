@@ -121,7 +121,7 @@ def _run_scrape_job(postcode_norm: str, postcode_display: str, home_or_business:
     import subprocess
     with _scrape_jobs_lock:
         _scrape_jobs[postcode_norm] = {"status": "running", "error": None}
-    scrape_timeout_sec = int(os.environ.get("SCRAPE_SUBPROCESS_TIMEOUT_SEC", "600"))
+    scrape_timeout_sec = int(os.environ.get("SCRAPE_SUBPROCESS_TIMEOUT_SEC", "900"))
     try:
         print(f"[scrape] Starting subprocess for postcode {postcode_display} ({home_or_business}) ...")
         # start_new_session=True isolates the subprocess so a browser crash doesn't take down Flask

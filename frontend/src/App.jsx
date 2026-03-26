@@ -75,9 +75,9 @@ export function App() {
     setLoading(true)
     try {
       let data = await fetchScrapeResults(norm)
-      const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000
+      const ONE_MONTH_MS = 30 * 24 * 60 * 60 * 1000
       const searchDate = data?.search_date ? new Date(data.search_date) : null
-      const isStale = !searchDate || (Date.now() - searchDate.getTime() > ONE_WEEK_MS)
+      const isStale = !searchDate || (Date.now() - searchDate.getTime() > ONE_MONTH_MS)
       const hasData = data && !data.no_saved_scrape && data.tariffs?.length > 0 && !isStale
       if (hasData) {
         // Preserve user-entered usage (including decimals). Only hydrate from scrape when empty.
@@ -125,7 +125,7 @@ export function App() {
       // Poll until completed or failed.
       // The backend scrape subprocess timeout is configurable; keep the UI comfortably higher.
       const pollIntervalMs = 5000
-      const maxWaitMs = 660000
+      const maxWaitMs = 960000
       const start = Date.now()
       let success = false
       while (Date.now() - start < maxWaitMs) {

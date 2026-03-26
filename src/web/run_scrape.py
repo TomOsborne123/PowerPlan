@@ -26,7 +26,7 @@ os.environ.setdefault("MOZ_DISABLE_GPU_SANDBOX", "1")
 def _scraper_headless():
     """
     Camoufox: True = native headless, 'virtual' = Xvfb (needs `xvfb` package in Docker).
-    Env SCRAPER_HEADLESS: 1/true, 0/false, virtual (default: virtual on Linux, True elsewhere).
+    Env SCRAPER_HEADLESS: 1/true, 0/false, virtual (default: True for speed).
     """
     raw = (os.environ.get("SCRAPER_HEADLESS") or "").strip().lower()
     if raw in ("1", "true", "yes"):
@@ -35,7 +35,7 @@ def _scraper_headless():
         return False
     if raw == "virtual":
         return "virtual"
-    return "virtual" if sys.platform.startswith("linux") else True
+    return True
 
 
 def main() -> int:
