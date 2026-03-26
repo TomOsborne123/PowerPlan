@@ -1,6 +1,9 @@
-# Import mysql connection library
+import os
+
 import mysql.connector
 from mysql.connector import Error
+
+from src.db import mysql_config
 
 def create_energy_tariff_database_simple():
     """
@@ -8,14 +11,15 @@ def create_energy_tariff_database_simple():
     Uses a single denormalized fact table for quick development
     """
 
+    conn = None
+    cursor = None
     try:
         # Connect to MySQL server (without specifying a database)
         print("Connecting to MySQL server...")
-        conn = mysql.connector.connect(
-            host="localhost",
-            user="root",
-            password="password"
-        )
+        cfg = mysql_config()
+        # We want to create/drop the target database, so connect without selecting a DB.
+        cfg.pop("database", None)
+        conn = mysql.connector.connect(**cfg)
 
         if conn.is_connected():
             print("✓ Connected to MySQL server")
@@ -23,16 +27,18 @@ def create_energy_tariff_database_simple():
 
             # Create database
             print("\nCreating database...")
-            cursor.execute("DROP DATABASE IF EXISTS energy_tariff")
-            cursor.execute("""
-                CREATE DATABASE energy_tariff
+            target_db = os.environ.get("TARGET_DB_NAME", "energy_tariff")
+
+            cursor.execute(f"DROP DATABASE IF EXISTS {target_db}")
+            cursor.execute(f"""
+                CREATE DATABASE {target_db}
                 CHARACTER SET utf8mb4
                 COLLATE utf8mb4_unicode_ci
             """)
-            print("✓ Database 'energy_tariff' created")
+            print(f"✓ Database '{target_db}' created")
 
             # Use the new database
-            cursor.execute("USE energy_tariff")
+            cursor.execute(f"USE {target_db}")
 
             # Create single fact table
             print("\nCreating fact table...")
@@ -85,8 +91,9 @@ def create_energy_tariff_database_simple():
         print(f"\n✗ Error: {e}")
 
     finally:
-        if conn.is_connected():
-            cursor.close()
+        if conn is not None and conn.is_connected():
+            if cursor is not None:
+                cursor.close()
             conn.close()
             print("\n✓ MySQL connection closed")
 
