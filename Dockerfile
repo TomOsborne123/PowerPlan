@@ -29,9 +29,42 @@ COPY pyproject.toml README.md LICENSE* ./
 COPY src/ ./src/
 
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel \
- && pip install --no-cache-dir . \
- && python -m playwright install-deps \
- && python -m camoufox fetch
+    && pip install --no-cache-dir . \
+    && python -m playwright install-deps \
+    && python - <<'PY'
+import io, json, zipfile, pathlib
+import requests
+
+from camoufox import pkgman
+
+install_dir = pathlib.Path(pkgman.INSTALL_DIR)
+install_dir.mkdir(parents=True, exist_ok=True)
+
+# Pinned Camoufox asset (matches the installed version on the dev machine).
+# camoufox-135.0.1-beta.24-lin.x86_64.zip
+url = "https://github.com/daijro/camoufox/releases/download/v135.0.1-beta.24/camoufox-135.0.1-beta.24-lin.x86_64.zip"
+version = "135.0.1"
+release = "beta.24"
+
+resp = requests.get(url, timeout=120)
+resp.raise_for_status()
+
+z = zipfile.ZipFile(io.BytesIO(resp.content))
+z.extractall(str(install_dir))
+
+# Write version metadata expected by camoufox pkgman.
+(install_dir / "version.json").write_text(json.dumps({"version": version, "release": release}))
+
+# Ensure executable permissions where relevant.
+import os
+for p in install_dir.rglob("*"):
+    try:
+        if p.is_file():
+            os.chmod(p, 0o755)
+    except Exception:
+        pass
+print(f"Camoufox installed into {install_dir}")
+PY
 
 # Copy built frontend into Flask static folder
 COPY --from=frontend-build /app/src/web/static/ ./src/web/static/
