@@ -122,13 +122,11 @@ export function App() {
         setLoading(false)
         return false
       }
-      // Poll until completed or failed.
-      // The backend scrape subprocess timeout is configurable; keep the UI comfortably higher.
+      // Poll until completed or failed (no max wait — for debugging slow scrapes on Render).
       const pollIntervalMs = 5000
-      const maxWaitMs = 960000
-      const start = Date.now()
       let success = false
-      while (Date.now() - start < maxWaitMs) {
+      // eslint-disable-next-line no-constant-condition -- intentional infinite poll until scrape ends
+      while (true) {
         const status = await fetchScrapeStatus(norm)
         if (status.status === 'completed') {
           data = await fetchScrapeResults(norm)
@@ -164,14 +162,6 @@ export function App() {
           break
         }
         await new Promise((r) => setTimeout(r, pollIntervalMs))
-      }
-      if (Date.now() - start >= maxWaitMs) {
-        setError('Scrape is taking longer than expected. Try again in a few minutes.')
-        if (triggeredByEnter) {
-          setGlobeSpinning(false)
-          setGlobeLanded(false)
-          setUiStep(1)
-        }
       }
       return success
     } catch {
