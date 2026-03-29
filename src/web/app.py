@@ -121,26 +121,15 @@ def _run_scrape_job(postcode_norm: str, postcode_display: str, home_or_business:
     import subprocess
     with _scrape_jobs_lock:
         _scrape_jobs[postcode_norm] = {"status": "running", "error": None}
-    # No subprocess timeout by default so long scrapes can finish on slow hosts.
-    # Set SCRAPE_SUBPROCESS_TIMEOUT_SEC to a positive integer to enforce a limit.
-    raw_timeout = os.environ.get("SCRAPE_SUBPROCESS_TIMEOUT_SEC", "").strip()
-    subprocess_timeout = None
-    if raw_timeout:
-        try:
-            n = int(raw_timeout)
-            if n > 0:
-                subprocess_timeout = n
-        except ValueError:
-            subprocess_timeout = None
     try:
         print(f"[scrape] Starting subprocess for postcode {postcode_display} ({home_or_business}) ...")
         # start_new_session=True isolates the subprocess so a browser crash doesn't take down Flask
+        # No timeout — wait until the scrape subprocess exits (success or failure).
         proc = subprocess.run(
             [sys.executable, "-m", "src.web.run_scrape", postcode_display, home_or_business],
             cwd=PROJECT_ROOT,
             capture_output=True,
             text=True,
-            timeout=subprocess_timeout,
             start_new_session=True,
         )
         if proc.returncode == 0:
@@ -152,21 +141,6 @@ def _run_scrape_job(postcode_norm: str, postcode_display: str, home_or_business:
             with _scrape_jobs_lock:
                 _scrape_jobs[postcode_norm] = {"status": "failed", "error": err_short}
             print(f"[scrape] Failed for postcode {postcode_display}: {err_short}")
-    except subprocess.TimeoutExpired as te:
-        with _scrape_jobs_lock:
-            _scrape_jobs[postcode_norm] = {
-                "status": "failed",
-                "error": f"Scrape timed out after {subprocess_timeout} seconds",
-            }
-
-        # subprocess.TimeoutExpired may or may not include captured output depending on Python version.
-        stdout_tail = (getattr(te, "stdout", None) or "").strip().split("\n")[-30:]
-        stderr_tail = (getattr(te, "stderr", None) or "").strip().split("\n")[-30:]
-        if stdout_tail:
-            print(f"[scrape] Timeout stdout tail for {postcode_display}:\n" + "\n".join(stdout_tail))
-        if stderr_tail:
-            print(f"[scrape] Timeout stderr tail for {postcode_display}:\n" + "\n".join(stderr_tail))
-        print(f"[scrape] Timeout for postcode {postcode_display} (timeout={subprocess_timeout}s)")
     except Exception as e:
         err_short = str(e) or type(e).__name__
         with _scrape_jobs_lock:
