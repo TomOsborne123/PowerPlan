@@ -116,6 +116,21 @@ def _get_scrape_results(postcode: str) -> dict | None:
         return None
 
 
+def _subprocess_output_excerpt(stdout: str | None, stderr: str | None, max_chars: int = 4000) -> str:
+    """Join recent stderr/stdout for logs and API error messages."""
+    parts: list[str] = []
+    for label, blob in (("stderr", stderr), ("stdout", stdout)):
+        if not (blob or "").strip():
+            continue
+        lines = blob.strip().split("\n")
+        tail = "\n".join(lines[-40:])
+        parts.append(f"--- {label} (last lines) ---\n{tail}")
+    text = "\n\n".join(parts).strip()
+    if len(text) > max_chars:
+        return text[-max_chars:]
+    return text or "Scrape failed (no output captured)"
+
+
 def _run_scrape_job(postcode_norm: str, postcode_display: str, home_or_business: str = "home") -> None:
     """Run scraper in a subprocess (avoids Playwright 'Event loop is closed' in threads)."""
     import subprocess
@@ -137,10 +152,10 @@ def _run_scrape_job(postcode_norm: str, postcode_display: str, home_or_business:
                 _scrape_jobs[postcode_norm] = {"status": "completed", "error": None}
             print(f"[scrape] Completed for postcode {postcode_display}")
         else:
-            err_short = (proc.stderr or proc.stdout or "Scrape failed").strip().split("\n")[-1][:200]
+            excerpt = _subprocess_output_excerpt(proc.stdout, proc.stderr)
             with _scrape_jobs_lock:
-                _scrape_jobs[postcode_norm] = {"status": "failed", "error": err_short}
-            print(f"[scrape] Failed for postcode {postcode_display}: {err_short}")
+                _scrape_jobs[postcode_norm] = {"status": "failed", "error": excerpt}
+            print(f"[scrape] Failed for postcode {postcode_display} (exit {proc.returncode})\n{excerpt}")
     except Exception as e:
         err_short = str(e) or type(e).__name__
         with _scrape_jobs_lock:
@@ -209,9 +224,10 @@ def api_run_scrape():
         existing = _scrape_jobs.get(postcode_norm)
         if existing and existing.get("status") == "running":
             return jsonify({"error": "Scrape already running for this postcode"}), 409
+    postcode_for_cli = (postcode or "").strip() or postcode_norm
     thread = threading.Thread(
         target=_run_scrape_job,
-        args=(postcode_norm, postcode_norm, home_or_business),
+        args=(postcode_norm, postcode_for_cli, home_or_business),
         daemon=True,
     )
     thread.start()

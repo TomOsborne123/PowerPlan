@@ -65,6 +65,8 @@ def main() -> int:
         )
         return 0
     except Exception as e:
+        import traceback
+        traceback.print_exc(file=sys.stderr)
         print(f"Scrape failed: {e}", file=sys.stderr)
         # Avoid Python shutdown/atexit so browser cleanup doesn't crash the process
         os._exit(1)

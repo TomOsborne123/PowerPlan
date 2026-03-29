@@ -122,15 +122,45 @@ export function App() {
         setLoading(false)
         return false
       }
-      // Poll until completed or failed (no max wait — for debugging slow scrapes on Render).
+      // Poll until completed/failed. Treat long-lived "idle" as lost in-memory job (e.g. Gunicorn worker restart).
       const pollIntervalMs = 5000
       let success = false
-      // eslint-disable-next-line no-constant-condition -- intentional infinite poll until scrape ends
+      let sawRunning = false
+      let polls = 0
+      const maxIdlePollsBeforeGiveUp = 72 // ~6 min: never saw running/failed (start not registered or routing issue)
+      // eslint-disable-next-line no-constant-condition -- poll until scrape ends or we give up on stuck idle
       while (true) {
         const status = await fetchScrapeStatus(norm)
+        polls += 1
+        if (status.status === 'running') sawRunning = true
+        if (status.status === 'idle') {
+          if (sawRunning) {
+            setError(
+              'Scrape progress was lost (server may have restarted). Try loading again — if it keeps happening, check Render logs and that only one Gunicorn worker is running.'
+            )
+            if (triggeredByEnter) {
+              setGlobeSpinning(false)
+              setGlobeLanded(false)
+              setUiStep(1)
+            }
+            break
+          }
+          if (polls >= maxIdlePollsBeforeGiveUp) {
+            setError(
+              'No scrape status from server after several minutes. The job may not have started: check API URL (VITE_API_BASE_URL), CORS, and database env vars on Render, then inspect logs.'
+            )
+            if (triggeredByEnter) {
+              setGlobeSpinning(false)
+              setGlobeLanded(false)
+              setUiStep(1)
+            }
+            break
+          }
+        }
         if (status.status === 'completed') {
           data = await fetchScrapeResults(norm)
-          if (data) {
+          const tariffsOk = data && !data.no_saved_scrape && Array.isArray(data.tariffs) && data.tariffs.length > 0
+          if (tariffsOk) {
             // Preserve user-entered usage (including decimals). Only hydrate from scrape when empty.
             setAnnualConsumptionKwh((prev) => (prev === '' || prev == null ? (data.annual_electricity_kwh ?? '') : prev))
             setLatitude(data.latitude ?? null)
@@ -148,6 +178,15 @@ export function App() {
                 setUiStep(3)
                 stepAdvanceTimerRef.current = null
               }, 650)
+            }
+          } else {
+            setError(
+              'Scrape reported done but no tariffs were found in the database. Check RDS credentials (DB_HOST, DB_USER, DB_PASSWORD, DB_NAME), security group, and Render logs for MySQL errors.'
+            )
+            if (triggeredByEnter) {
+              setGlobeSpinning(false)
+              setGlobeLanded(false)
+              setUiStep(1)
             }
           }
           break
