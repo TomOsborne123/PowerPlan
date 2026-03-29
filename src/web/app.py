@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import threading
 import webbrowser
@@ -116,46 +117,71 @@ def _get_scrape_results(postcode: str) -> dict | None:
         return None
 
 
-def _subprocess_output_excerpt(stdout: str | None, stderr: str | None, max_chars: int = 4000) -> str:
-    """Join recent stderr/stdout for logs and API error messages."""
-    parts: list[str] = []
-    for label, blob in (("stderr", stderr), ("stdout", stdout)):
-        if not (blob or "").strip():
-            continue
-        lines = blob.strip().split("\n")
-        tail = "\n".join(lines[-40:])
-        parts.append(f"--- {label} (last lines) ---\n{tail}")
-    text = "\n\n".join(parts).strip()
-    if len(text) > max_chars:
-        return text[-max_chars:]
-    return text or "Scrape failed (no output captured)"
+def _run_scrape_subprocess(argv: list[str], cwd: Path) -> tuple[int, str]:
+    """
+    Run the scraper child process. Stream combined stdout/stderr into the server log in real time.
+    capture_output=True would buffer everything until exit — unusable for long scrapes on Render.
+    """
+    collected: list[str] = []
+    lock = threading.Lock()
+    max_lines = 400
+
+    proc = subprocess.Popen(
+        argv,
+        cwd=str(cwd),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+        start_new_session=True,
+        env={**os.environ, "PYTHONUNBUFFERED": "1"},
+    )
+
+    def _reader() -> None:
+        if proc.stdout is None:
+            return
+        for line in proc.stdout:
+            with lock:
+                collected.append(line)
+                if len(collected) > max_lines:
+                    collected.pop(0)
+            print(line, end="", flush=True)
+
+    t = threading.Thread(target=_reader, daemon=True)
+    t.start()
+    code = proc.wait()
+    t.join(timeout=60)
+    with lock:
+        tail = "".join(collected)
+    if len(tail) > 4500:
+        tail = tail[-4500:]
+    return code, tail
 
 
 def _run_scrape_job(postcode_norm: str, postcode_display: str, home_or_business: str = "home") -> None:
     """Run scraper in a subprocess (avoids Playwright 'Event loop is closed' in threads)."""
-    import subprocess
     with _scrape_jobs_lock:
         _scrape_jobs[postcode_norm] = {"status": "running", "error": None}
     try:
-        print(f"[scrape] Starting subprocess for postcode {postcode_display} ({home_or_business}) ...")
-        # start_new_session=True isolates the subprocess so a browser crash doesn't take down Flask
-        # No timeout — wait until the scrape subprocess exits (success or failure).
-        proc = subprocess.run(
-            [sys.executable, "-m", "src.web.run_scrape", postcode_display, home_or_business],
-            cwd=PROJECT_ROOT,
-            capture_output=True,
-            text=True,
-            start_new_session=True,
+        print(
+            f"[scrape] Starting subprocess for postcode {postcode_display} ({home_or_business}) ...",
+            flush=True,
         )
-        if proc.returncode == 0:
+        # -u: unbuffered Python so prints appear while the scrape runs (pipes are not TTYs).
+        argv = [sys.executable, "-u", "-m", "src.web.run_scrape", postcode_display, home_or_business]
+        code, tail = _run_scrape_subprocess(argv, PROJECT_ROOT)
+        if code == 0:
             with _scrape_jobs_lock:
                 _scrape_jobs[postcode_norm] = {"status": "completed", "error": None}
-            print(f"[scrape] Completed for postcode {postcode_display}")
+            print(f"[scrape] Completed for postcode {postcode_display}", flush=True)
         else:
-            excerpt = _subprocess_output_excerpt(proc.stdout, proc.stderr)
+            excerpt = (tail.strip() or f"Scraper exited with code {code} (no output captured).")
             with _scrape_jobs_lock:
                 _scrape_jobs[postcode_norm] = {"status": "failed", "error": excerpt}
-            print(f"[scrape] Failed for postcode {postcode_display} (exit {proc.returncode})\n{excerpt}")
+            print(
+                f"[scrape] Failed for postcode {postcode_display} (exit {code})\n{excerpt}",
+                flush=True,
+            )
     except Exception as e:
         err_short = str(e) or type(e).__name__
         with _scrape_jobs_lock:

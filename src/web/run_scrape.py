@@ -49,6 +49,7 @@ def main() -> int:
     home_or_business = (sys.argv[2].strip().lower() if len(sys.argv) > 2 else "home")
     if home_or_business not in ("home", "business"):
         home_or_business = "home"
+    print(f"[run_scrape] pid={os.getpid()} postcode={postcode!r} mode={home_or_business!r}", flush=True)
     scraper = None
     try:
         from src.api.energyScraping.ScrapeTariff import ScrapeTariff
