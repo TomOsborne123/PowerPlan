@@ -5,6 +5,7 @@ Updated to use Camoufox
 """
 
 from camoufox.sync_api import Camoufox
+from camoufox.addons import DefaultAddons
 from bs4 import BeautifulSoup
 try:
     from .Tariff import Tariff
@@ -319,6 +320,9 @@ class ScrapeTariff:
             with Camoufox(
                     headless=headless,
                     humanize=False,  # Try disabling humanize
+                    # Speed up: Camoufox defaults to downloading UBO (uBlock Origin) on first run.
+                    # Excluding it removes the long "Downloading addon (UBO)" startup delay.
+                    exclude_addons=[DefaultAddons.UBO],
                     # Extra arguments to improve stability in linux containers.
                     args=["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"],
             ) as browser:
@@ -333,7 +337,10 @@ class ScrapeTariff:
                 })
 
                 print("Loading page...")
-                self.page.goto(url, wait_until='load')
+                # 'load' can hang on some sites; 'domcontentloaded' is usually enough
+                # for the subsequent form interactions.
+                self.page.goto(url, wait_until='domcontentloaded')
+                print("Page navigation complete (domcontentloaded).")
                 time.sleep(_SCRAPE_AFTER_GOTO)
 
                 print(f"Page title: {self.page.title()}")
