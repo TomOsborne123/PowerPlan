@@ -5,7 +5,6 @@ Updated to use Camoufox
 """
 
 from camoufox.sync_api import Camoufox
-from camoufox.addons import DefaultAddons
 from bs4 import BeautifulSoup
 try:
     from .Tariff import Tariff
@@ -315,44 +314,26 @@ class ScrapeTariff:
             }
 
         try:
-            _os = __import__("os")
-            launch_timeout_ms = int((_os.environ.get("SCRAPER_BROWSER_LAUNCH_TIMEOUT_MS") or "45000").strip() or "45000")
-            goto_timeout_ms = int((_os.environ.get("SCRAPER_GOTO_TIMEOUT_MS") or "60000").strip() or "60000")
             # Use Camoufox with humanized settings
-            print(f"Launching Camoufox browser... (timeout={launch_timeout_ms}ms)", flush=True)
+            print("Launching Camoufox browser...")
             with Camoufox(
                     headless=headless,
                     humanize=False,  # Try disabling humanize
-                    # Avoid extra IP/geolocation lookups on startup in constrained hosts.
-                    geoip=False,
-                    # Speed up: Camoufox defaults to downloading UBO (uBlock Origin) on first run.
-                    # Excluding it removes the long "Downloading addon (UBO)" startup delay.
-                    exclude_addons=[DefaultAddons.UBO],
-                    # Fail fast if browser bootstrap hangs in the container.
-                    timeout=launch_timeout_ms,
                     # Extra arguments to improve stability in linux containers.
                     args=["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"],
             ) as browser:
-                print("Camoufox browser launched.", flush=True)
                 self.browser = browser
-                print("Creating browser page...", flush=True)
                 self.page = browser.new_page()
-                print("Browser page created.", flush=True)
 
                 # Set headers to request uncompressed content
-                print("Setting request headers...", flush=True)
                 self.page.set_extra_http_headers({
                     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                     'Accept-Encoding': 'identity',  # Request uncompressed
                     'Accept-Language': 'en-GB,en;q=0.9',
                 })
-                print("Headers set.", flush=True)
 
-                print(f"Loading page... (goto timeout={goto_timeout_ms}ms)", flush=True)
-                # 'load' can hang on some sites; 'domcontentloaded' is usually enough
-                # for the subsequent form interactions.
-                self.page.goto(url, wait_until='domcontentloaded', timeout=goto_timeout_ms)
-                print("Page navigation complete (domcontentloaded).", flush=True)
+                print("Loading page...")
+                self.page.goto(url, wait_until='load')
                 time.sleep(_SCRAPE_AFTER_GOTO)
 
                 print(f"Page title: {self.page.title()}")
