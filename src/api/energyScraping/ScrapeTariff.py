@@ -18,6 +18,20 @@ import re
 import requests
 from typing import Dict, Optional
 from pathlib import Path
+import os
+import sys
+
+
+def _configure_live_stdio() -> None:
+    """Stdout/stderr attached to pipes default to block-buffering; fix for timely Render logs."""
+    os.environ.setdefault("PYTHONUNBUFFERED", "1")
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            if hasattr(stream, "reconfigure"):
+                stream.reconfigure(line_buffering=True)
+        except Exception:
+            pass
+
 
 # Debug output for scrape (HTML, screenshots) – keeps repo root clean
 _DEBUG_DIR = Path(__file__).resolve().parents[3] / "output" / "scrape_debug"
@@ -285,9 +299,11 @@ class ScrapeTariff:
                home_or_business: str = 'home',
                headless: bool | str = False) -> List[Tariff]:
 
+        _configure_live_stdio()
+
         url = "https://www.moneysupermarket.com/gas-and-electricity/"
 
-        print(f"-- Starting scrape for {postcode} --")
+        print(f"-- Starting scrape for {postcode} --", flush=True)
 
         self.location_data = PostcodeLookup.lookup(postcode)
         if self.location_data:

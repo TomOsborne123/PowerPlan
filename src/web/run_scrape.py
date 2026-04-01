@@ -13,6 +13,15 @@ import os
 import sys
 from pathlib import Path
 
+# Live logs when stdout is a pipe (e.g. Gunicorn subprocess on Render): flush each line.
+os.environ.setdefault("PYTHONUNBUFFERED", "1")
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        if hasattr(_stream, "reconfigure"):
+            _stream.reconfigure(line_buffering=True)
+    except Exception:
+        pass
+
 # Ensure project root is on path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
