@@ -1,5 +1,13 @@
 import { useState, useEffect, useRef } from 'react'
-import { usePostcodeLookup, fetchRecommend, fetchScrapeResults, fetchRunScrape, fetchScrapeStatus } from './api'
+import { usePostcodeLookup, fetchRecommend, fetchScrapeResults, fetchRunScrape, fetchScrapeStatus, fetchExportPriceReference } from './api'
+import {
+  HEATING_SHARE_OPTIONS,
+  HEAT_PUMP_OPTIONS,
+  INSULATION_OPTIONS,
+  SOLAR_TIER_INFO,
+  WIND_TIER_INFO,
+  copForHeatPumpTier,
+} from './optimiserConstants'
 import { ResultView } from './ResultView'
 import { ScrapeGlobe } from './ScrapeGlobe'
 import { CesiumFlyTo } from './CesiumFlyTo'
@@ -19,8 +27,9 @@ export function App() {
   const [scrapeTariffs, setScrapeTariffs] = useState([])
   const [scraping, setScraping] = useState(false)
   const [heatingFraction, setHeatingFraction] = useState(0.6)
-  const [insulationRValue, setInsulationRValue] = useState(0)
-  const [heatPumpCop, setHeatPumpCop] = useState(2.5)
+  const [insulationRValue, setInsulationRValue] = useState(2.5)
+  const [heatPumpTier, setHeatPumpTier] = useState('mid')
+  const [exportPriceHint, setExportPriceHint] = useState('')
   const [solarTier, setSolarTier] = useState('budget')
   const [windTier, setWindTier] = useState('budget')
   const [exportPricePerKwh, setExportPricePerKwh] = useState(0.05)
@@ -43,6 +52,32 @@ export function App() {
   const debounceRef = useRef(null)
   const requestSeqRef = useRef(0)
   const stepAdvanceTimerRef = useRef(null)
+  const didFetchExportRef = useRef(false)
+
+  useEffect(() => {
+    if (uiStep !== 3 || didFetchExportRef.current) return
+    didFetchExportRef.current = true
+    let cancelled = false
+    ;(async () => {
+      try {
+        const ref = await fetchExportPriceReference()
+        if (cancelled) return
+        if (ref.export_price_per_kwh != null) {
+          setExportPricePerKwh(ref.export_price_per_kwh)
+          setExportPriceHint(
+            `Live estimate: Octopus “${ref.tariff_name || 'Outgoing'}” flat export (${ref.export_price_per_kwh} £/kWh). ${ref.disclaimer || ''}`
+          )
+        } else {
+          setExportPriceHint(ref.disclaimer || ref.error || 'Could not load live export rate; using the value in the box.')
+        }
+      } catch {
+        if (!cancelled) setExportPriceHint('Could not load live export rate; enter £/kWh manually.')
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [uiStep])
 
   // No scrolling: keep the UI within a single view.
 
@@ -285,6 +320,7 @@ export function App() {
       const solarMinKw = Math.max(0, Math.min(solarMaxKw, solarMinKwBase))
       const windMinKw = Math.max(0, Math.min(windMaxKw, windMinKwBase))
       const exportPrice = Math.max(0, exportPricePerKwh * (1 + exportPricePct / 100))
+      const heatPumpCop = copForHeatPumpTier(heatPumpTier)
       const data = await fetchRecommend({
         postcode: norm,
         latitude: latitude ?? undefined,
@@ -352,7 +388,7 @@ export function App() {
     exportPricePct,
     heatingFraction,
     insulationRValue,
-    heatPumpCop,
+    heatPumpTier,
     solarTier,
     windTier,
     exportPricePerKwh,
@@ -528,71 +564,83 @@ export function App() {
           <div className="form-row col3">
             <div>
               <label htmlFor="heating_fraction">
-                Heating fraction (0–1)
-                <InfoIcon text="Share of your annual electricity demand that relates to space heating." />
+                How much of your electricity is heating?
+                <InfoIcon text="Rough share of your yearly electricity use used for space heating (not hot water). Pick the sentence that fits; we convert it into a number for the model." />
               </label>
-              <input
-                type="number"
+              <select
                 id="heating_fraction"
                 value={heatingFraction}
                 onChange={(e) => setHeatingFraction(Number(e.target.value))}
-                min={0}
-                max={1}
-                step={0.1}
-              />
+              >
+                {HEATING_SHARE_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+              <p className="field-hint">You don’t need an exact meter split — a ballpark is fine.</p>
             </div>
             <div>
               <label htmlFor="insulation_r_value">
-                Insulation R-value
-                <InfoIcon text="Higher values reduce heating demand before sizing solar/wind." />
+                Home insulation (fabric)
+                <InfoIcon text="Roughly how good your walls, loft and draught-proofing are. Higher = less heat loss, so less demand to cover with solar/wind. Values are a model input (similar to thermal resistance), not a survey." />
               </label>
-              <input
-                type="number"
+              <select
                 id="insulation_r_value"
                 value={insulationRValue}
                 onChange={(e) => setInsulationRValue(Number(e.target.value))}
-                min={0}
-                step={0.5}
-              />
+              >
+                {INSULATION_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
             </div>
             <div>
-              <label htmlFor="heat_pump_cop">
-                Heat pump COP
-                <InfoIcon text="Coefficient of performance: higher COP means less electricity for the same heat." />
+              <label htmlFor="heat_pump_tier">
+                Heat pump type
+                <InfoIcon text="Air-source heat pumps turn electricity into heat more efficiently than old electric heaters. We use simple “budget / mid / premium” performance bands (COP). Follow the links for independent background — not a product recommendation." />
               </label>
               <select
-                id="heat_pump_cop"
-                value={heatPumpCop}
-                onChange={(e) => setHeatPumpCop(Number(e.target.value))}
+                id="heat_pump_tier"
+                value={heatPumpTier}
+                onChange={(e) => setHeatPumpTier(e.target.value)}
               >
-                <option value={1}>1</option>
-                <option value={2.5}>2.5</option>
-                <option value={3.5}>3.5</option>
+                {HEAT_PUMP_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
               </select>
+              <p className="field-hint">
+                Model uses COP ≈ {copForHeatPumpTier(heatPumpTier)}.{' '}
+                <a href={HEAT_PUMP_OPTIONS.find((x) => x.value === heatPumpTier)?.specUrl} target="_blank" rel="noopener noreferrer">
+                  Read typical specs / guidance
+                </a>
+              </p>
             </div>
           </div>
 
           <div className="form-row col2">
             <div>
               <label htmlFor="solar_tier">
-                Solar tier
-                <InfoIcon text="Selects the solar hardware cost/performance assumptions for optimisation." />
+                Solar cost band (~£/kWp installed, indicative)
+                <InfoIcon text="Higher bands assume pricier kit and slightly better modelled output. Figures are for comparison only — get quotes for real projects." />
               </label>
               <select id="solar_tier" value={solarTier} onChange={(e) => setSolarTier(e.target.value)}>
-                <option value="budget">Budget</option>
-                <option value="mid">Mid</option>
-                <option value="premium">Premium</option>
+                {Object.entries(SOLAR_TIER_INFO).map(([k, v]) => (
+                  <option key={k} value={k}>
+                    {v.label} — ~£{v.capexPerKw.toLocaleString('en-GB')}/kWp · {v.blurb}
+                  </option>
+                ))}
               </select>
             </div>
             <div>
               <label htmlFor="wind_tier">
-                Wind tier
-                <InfoIcon text="Selects the wind hardware cost/performance assumptions for optimisation." />
+                Wind cost band (~£/kW installed, indicative)
+                <InfoIcon text="Small wind costs vary hugely by site and planning; these are illustrative bands for the optimiser only." />
               </label>
               <select id="wind_tier" value={windTier} onChange={(e) => setWindTier(e.target.value)}>
-                <option value="budget">Budget</option>
-                <option value="mid">Mid</option>
-                <option value="premium">Premium</option>
+                {Object.entries(WIND_TIER_INFO).map(([k, v]) => (
+                  <option key={k} value={k}>
+                    {v.label} — ~£{v.capexPerKw.toLocaleString('en-GB')}/kW · {v.blurb}
+                  </option>
+                ))}
               </select>
             </div>
           </div>
@@ -601,7 +649,7 @@ export function App() {
             <div>
               <label htmlFor="export_price_per_kwh">
                 Export price (£/kWh)
-                <InfoIcon text="Revenue per kWh exported to the grid; improves payback when solar/wind exceed demand." />
+                <InfoIcon text="Money you get per unit of electricity you export. We try to preload a public reference rate; override to match your tariff." />
               </label>
               <input
                 type="number"
@@ -611,11 +659,12 @@ export function App() {
                 step={0.01}
                 min={0}
               />
+              {exportPriceHint ? <p className="field-hint">{exportPriceHint}</p> : null}
             </div>
             <div>
               <label htmlFor="optimize_over_years">
-                Optimise over (years)
-                <InfoIcon text="Time horizon used when scoring tariffs (capex + grid costs over N years)." />
+                Compare costs over how many years?
+                <InfoIcon text="We add up roughly: equipment cost today + importing power minus export earnings, over the years you choose. Longer horizon = more years of bills in the comparison." />
               </label>
               <input
                 type="number"
@@ -626,6 +675,7 @@ export function App() {
                 max={20}
                 step={1}
               />
+              <p className="field-hint">Layman terms: “If I committed for N years, what’s the total picture?”</p>
             </div>
             <div style={{ display: 'flex', alignItems: 'flex-end' }}>
               <label className="checkbox-label">
@@ -643,8 +693,8 @@ export function App() {
           <div className="form-row col2" style={{ marginTop: '0.4rem' }}>
             <div>
               <label htmlFor="solar_capacity_pct">
-                Solar range: {solarCapacityPct}%
-                <InfoIcon text="Adjusts the optimiser's solar capacity search bounds around the base 20 kW." />
+                Solar search slider: {solarCapacityPct}%
+                <InfoIcon text="Another name for this control is a range slider: it widens or narrows how much solar capacity the tool is allowed to consider around a 20 kW reference." />
               </label>
               <input
                 type="range"
@@ -658,8 +708,8 @@ export function App() {
             </div>
             <div>
               <label htmlFor="wind_capacity_pct">
-                Wind range: {windCapacityPct}%
-                <InfoIcon text="Adjusts the optimiser's wind capacity search bounds around the base 10 kW." />
+                Wind search slider: {windCapacityPct}%
+                <InfoIcon text="Range slider for wind: search bounds around a 10 kW reference." />
               </label>
               <input
                 type="range"
@@ -676,8 +726,8 @@ export function App() {
           <div className="form-row col2" style={{ marginTop: '0.2rem' }}>
             <div>
               <label htmlFor="demand_pct">
-                Demand: {demandPct}%
-                <InfoIcon text="Scales your baseline annual electricity demand before optimisation." />
+                Demand slider: {demandPct}%
+                <InfoIcon text="Range slider: nudges your annual usage up or down before running the optimiser (e.g. if your bill is a bit higher or lower than the scrape)." />
               </label>
               <input
                 type="range"
@@ -690,7 +740,10 @@ export function App() {
               />
             </div>
             <div>
-              <label htmlFor="export_price_pct">Export price: {exportPricePct}%</label>
+              <label htmlFor="export_price_pct">
+                Export pay sensitivity: {exportPricePct}%
+                <InfoIcon text="Range slider: stress-test how sensitive results are to your export £/kWh (±%)." />
+              </label>
               <input
                 type="range"
                 id="export_price_pct"
@@ -726,43 +779,48 @@ export function App() {
               <>
                 <div className="form-row col3">
                   <div>
-                    <label htmlFor="heating_fraction">
-                      Heating {heatingFraction.toFixed(1)}
-                      <InfoIcon text="Share of demand that is space heating." />
+                    <label htmlFor="heating_fraction_results">
+                      Heating share
+                      <InfoIcon text="Rough share of yearly electricity used for space heating." />
                     </label>
-                    <input
-                      type="number"
-                      id="heating_fraction"
+                    <select
+                      id="heating_fraction_results"
                       value={heatingFraction}
                       onChange={(e) => setHeatingFraction(Number(e.target.value))}
-                      min={0}
-                      max={1}
-                      step={0.1}
-                    />
+                    >
+                      {HEATING_SHARE_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>{o.label}</option>
+                      ))}
+                    </select>
                   </div>
                   <div>
-                    <label htmlFor="insulation_r_value">
-                      Insulation {insulationRValue}
-                      <InfoIcon text="Insulation strength (R-value) used to reduce heating demand." />
+                    <label htmlFor="insulation_r_value_results">
+                      Insulation
+                      <InfoIcon text="Fabric / insulation level for the model." />
                     </label>
-                    <input
-                      type="number"
-                      id="insulation_r_value"
+                    <select
+                      id="insulation_r_value_results"
                       value={insulationRValue}
                       onChange={(e) => setInsulationRValue(Number(e.target.value))}
-                      min={0}
-                      step={0.5}
-                    />
+                    >
+                      {INSULATION_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>{o.label}</option>
+                      ))}
+                    </select>
                   </div>
                   <div>
-                    <label htmlFor="heat_pump_cop">
-                      Heat pump COP (select) {heatPumpCop}
-                      <InfoIcon text="Heat pump coefficient of performance; higher COP reduces electricity demand for heating." />
+                    <label htmlFor="heat_pump_tier_results">
+                      Heat pump (COP ≈ {copForHeatPumpTier(heatPumpTier)})
+                      <InfoIcon text="Heat pump performance band." />
                     </label>
-                    <select id="heat_pump_cop" value={heatPumpCop} onChange={(e) => setHeatPumpCop(Number(e.target.value))}>
-                      <option value={1}>1</option>
-                      <option value={2.5}>2.5</option>
-                      <option value={3.5}>3.5</option>
+                    <select
+                      id="heat_pump_tier_results"
+                      value={heatPumpTier}
+                      onChange={(e) => setHeatPumpTier(e.target.value)}
+                    >
+                      {HEAT_PUMP_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>{o.label}</option>
+                      ))}
                     </select>
                   </div>
                 </div>
@@ -770,8 +828,8 @@ export function App() {
                 <div className="form-row col2" style={{ marginTop: '0.35rem' }}>
                   <div>
                     <label htmlFor="solar_capacity_pct">
-                      Solar {solarCapacityPct}%
-                      <InfoIcon text="Solar capacity search bound multiplier (around 20 kW base)." />
+                      Solar slider {solarCapacityPct}%
+                      <InfoIcon text="Range slider: solar search bounds around 20 kW." />
                     </label>
                     <input
                       type="range"
@@ -785,8 +843,8 @@ export function App() {
                   </div>
                   <div>
                     <label htmlFor="wind_capacity_pct">
-                      Wind {windCapacityPct}%
-                      <InfoIcon text="Wind capacity search bound multiplier (around 10 kW base)." />
+                      Wind slider {windCapacityPct}%
+                      <InfoIcon text="Range slider: wind search bounds around 10 kW." />
                     </label>
                     <input
                       type="range"
@@ -803,8 +861,8 @@ export function App() {
                 <div className="form-row col2" style={{ marginTop: '0.35rem' }}>
                   <div>
                     <label htmlFor="demand_pct">
-                      Demand {demandPct}%
-                      <InfoIcon text="Scales baseline annual electricity demand before optimisation." />
+                      Demand slider {demandPct}%
+                      <InfoIcon text="Range slider: scales baseline annual electricity use." />
                     </label>
                     <input
                       type="range"
@@ -818,8 +876,8 @@ export function App() {
                   </div>
                   <div>
               <label htmlFor="export_price_pct">
-                Export {exportPricePct}%
-                <InfoIcon text="Adjusts the export price used when scoring tariffs." />
+                Export sensitivity {exportPricePct}%
+                <InfoIcon text="Range slider: stress-test export £/kWh." />
               </label>
                     <input
                       type="range"

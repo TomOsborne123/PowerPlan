@@ -55,6 +55,7 @@ _SCRAPE_BEFORE_FUEL = 0.8
 _SCRAPE_RESULTS_POLL = 2.0
 _SCRAPE_AFTER_RESULTS_SELECTOR = 1.0
 _SCRAPE_POSTCODE_DOM = 2.5
+_SCRAPE_ADDRESS_UI_MAX_WAIT = 18.0  # Address list often loads after postcode API response
 _SCRAPE_AFTER_SUBMIT = 1.5
 _SCRAPE_AFTER_CLICK = 1.0
 _SCRAPE_PRE_CLICK = 0.6
@@ -725,106 +726,172 @@ class ScrapeTariff:
             try:
                 postcode_input.press("Enter")
                 print("✓ Submitted postcode (Enter key)")
-            except:
+            except Exception:
                 try:
                     submit_btn = self.page.locator(
                         "button[type='submit'], button:has-text('Continue'), button:has-text('Next'), button:has-text('Find')"
                     ).first
                     submit_btn.click()
                     print("✓ Submitted postcode (button click)")
-                except:
+                except Exception:
                     print("⚠ Could not submit - trying to continue anyway")
 
-            # Wait for address dropdown or list to appear (site may use select or custom widget)
             time.sleep(_SCRAPE_POSTCODE_DOM)
 
-            # Select address - try <select> first, then custom dropdowns (role="listbox", etc.)
-            address_selected = False
-            dropdown_selectors = [
-                "#address",
-                "select[name*='address']",
-                "select[id*='address']",
-                "select[class*='address']",
-                "select",  # Generic select as fallback
-            ]
-
-            for selector in dropdown_selectors:
+            # Open combobox-style address fields (click triggers fetch of address list)
+            for open_sel in [
+                '[role="combobox"]',
+                'input[aria-autocomplete="list"]',
+                'input[aria-haspopup="listbox"]',
+                '[data-testid*="address" i] input',
+                'input[placeholder*="address" i]',
+            ]:
                 try:
-                    address_dropdown = self.page.locator(selector).first
-                    if address_dropdown.is_visible(timeout=5000):
-                        print(f"✓ Found address dropdown using: {selector}")
+                    loc = self.page.locator(open_sel).first
+                    if loc.is_visible(timeout=1500):
+                        loc.click(timeout=2000)
+                        time.sleep(_SCRAPE_SHORT)
+                        print(f"✓ Opened possible address control: {open_sel}")
+                        break
+                except Exception:
+                    continue
 
-                        # Scroll into view
+            address_selected = False
+
+            # Poll until address UI has choices (async postcode lookup)
+            deadline = time.monotonic() + _SCRAPE_ADDRESS_UI_MAX_WAIT
+            while time.monotonic() < deadline and not address_selected:
+                # --- Native <select> (prefer specific selectors; avoid first random <select> on page) ---
+                dropdown_selectors = [
+                    "#address",
+                    "select[name*='address' i]",
+                    "select[id*='address' i]",
+                    "select[class*='address' i]",
+                ]
+                for selector in dropdown_selectors:
+                    try:
+                        address_dropdown = self.page.locator(selector).first
+                        if not address_dropdown.is_visible(timeout=800):
+                            continue
+                        n_opts = address_dropdown.locator("option").count()
+                        if n_opts < 2:
+                            continue
+                        print(f"✓ Found address <select> using: {selector} ({n_opts} options)")
+
                         address_dropdown.scroll_into_view_if_needed()
                         time.sleep(_SCRAPE_SHORT)
 
-                        # Get available addresses
                         options = address_dropdown.locator("option").all()
-                        if not options:
-                            continue
-                        print(f"✓ Found {len(options)} address options:")
-
-                        # Display first few options
                         for i, option in enumerate(options[:5]):
-                            text = option.text_content()
+                            text = (option.text_content() or "").strip()
                             print(f"  {i}: {text[:60]}")
 
-                        # Check if first option is placeholder
                         first_option_text = (options[0].text_content() or "").lower()
-                        is_placeholder = any(word in first_option_text for word in ['select', 'choose', 'please', '--'])
+                        is_placeholder = any(
+                            word in first_option_text for word in ("select", "choose", "please", "--", "pick")
+                        )
 
                         if is_placeholder:
-                            # Skip placeholder, select address_index + 1
                             actual_index = address_index + 1
                             if len(options) > actual_index:
                                 address_dropdown.select_option(index=actual_index)
-                                selected_text = options[actual_index].text_content()
                                 print(
-                                    f"✓ Selected address {address_index} (actual index {actual_index}, skipped placeholder): {selected_text[:60]}")
+                                    f"✓ Selected address (skipped placeholder): "
+                                    f"{(options[actual_index].text_content() or '')[:60]}"
+                                )
                                 address_selected = True
-                            else:
-                                print(f"⚠ Not enough addresses (found {len(options)}, need {actual_index + 1})")
-                        else:
-                            # No placeholder, select directly
-                            if len(options) > address_index:
-                                address_dropdown.select_option(index=address_index)
-                                selected_text = options[address_index].text_content()
-                                print(f"✓ Selected address {address_index}: {selected_text[:60]}")
-                                address_selected = True
-                            else:
-                                print(f"⚠ Not enough addresses (found {len(options)}, need {address_index + 1})")
+                        elif len(options) > address_index:
+                            address_dropdown.select_option(index=address_index)
+                            print(f"✓ Selected address {address_index}: {(options[address_index].text_content() or '')[:60]}")
+                            address_selected = True
 
                         if address_selected:
-                            time.sleep(_SCRAPE_PRE_CLICK)
                             break
+                    except Exception as e:
+                        print(f"  <select> {selector}: {type(e).__name__}")
+                        continue
 
-                except Exception as e:
-                    print(f"  Failed with {selector}: {type(e).__name__}")
-                    continue
+                if address_selected:
+                    break
 
-            # If no <select> found, try custom address list (e.g. role="listbox" / role="option")
-            if not address_selected:
+                # Any visible <select> with multiple real-looking options (last resort)
+                if not address_selected:
+                    try:
+                        for i in range(self.page.locator("select").count()):
+                            sel = self.page.locator("select").nth(i)
+                            if not sel.is_visible(timeout=500):
+                                continue
+                            n = sel.locator("option").count()
+                            if n < 2:
+                                continue
+                            opts = sel.locator("option").all()
+                            texts = [(o.text_content() or "").strip().lower() for o in opts[:3]]
+                            if any("postcode" in t for t in texts if t):
+                                continue
+                            print(f"✓ Using visible <select> #{i} with {n} options")
+                            sel.scroll_into_view_if_needed()
+                            time.sleep(_SCRAPE_SHORT)
+                            first = (opts[0].text_content() or "").lower()
+                            skip = any(w in first for w in ("select", "choose", "please", "--", "pick"))
+                            idx = address_index + (1 if skip else 0)
+                            if len(opts) > idx:
+                                sel.select_option(index=idx)
+                                address_selected = True
+                                print(f"✓ Selected option index {idx}")
+                                break
+                    except Exception as e:
+                        print(f"  Generic select scan: {type(e).__name__}")
+
+                if address_selected:
+                    break
+
+                # --- Custom lists: role=option, MUI/React menus ---
                 for list_selector in [
                     '[role="listbox"] [role="option"]',
                     '[role="listbox"] li',
-                    '[data-testid*="address"]',
-                    '.address-list li',
-                    '[class*="address"] [class*="option"]',
-                    'ul[class*="address"] li',
+                    "div[role='option']",
+                    '[data-testid*="address" i]',
+                    '[data-testid*="suggestion" i]',
+                    ".address-list li",
+                    '[class*="Address"] [class*="option" i]',
+                    'ul[class*="menu" i] li',
+                    'div[class*="menu" i] [role="option"]',
                 ]:
                     try:
-                        opts = self.page.locator(list_selector).all()
-                        if len(opts) > address_index:
-                            print(f"✓ Found address list using: {list_selector} ({len(opts)} items)")
-                            opts[address_index].scroll_into_view_if_needed()
-                            time.sleep(_SCRAPE_MICRO)
-                            opts[address_index].click()
-                            address_selected = True
-                            time.sleep(_SCRAPE_PRE_CLICK)
+                        opts = self.page.locator(list_selector)
+                        cnt = opts.count()
+                        if cnt <= address_index:
+                            continue
+                        # Skip empty or heading rows
+                        visible_idx = 0
+                        for j in range(min(cnt, 30)):
+                            o = opts.nth(j)
+                            if not o.is_visible(timeout=300):
+                                continue
+                            txt = (o.text_content() or "").strip().lower()
+                            if not txt or any(x in txt for x in ("select", "choose address", "search")):
+                                continue
+                            if visible_idx == address_index:
+                                o.scroll_into_view_if_needed()
+                                time.sleep(_SCRAPE_MICRO)
+                                o.click()
+                                print(f"✓ Clicked address list item via: {list_selector} → {txt[:50]}")
+                                address_selected = True
+                                break
+                            visible_idx += 1
+                        if address_selected:
                             break
                     except Exception as e:
-                        print(f"  List selector {list_selector}: {type(e).__name__}")
+                        print(f"  List {list_selector}: {type(e).__name__}")
                         continue
+
+                if address_selected:
+                    break
+
+                time.sleep(0.45)
+
+            if address_selected:
+                time.sleep(_SCRAPE_PRE_CLICK)
 
             if not address_selected:
                 print("✗ Failed to select address")

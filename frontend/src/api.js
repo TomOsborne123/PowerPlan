@@ -89,6 +89,13 @@ export async function fetchScrapeStatus(postcode) {
   return r.ok ? data : { status: 'idle' }
 }
 
+/** Indicative export price (£/kWh) from public Octopus product data; may 503 if API fails. */
+export async function fetchExportPriceReference() {
+  const r = await fetch(apiUrl('/api/export-price'))
+  const data = await r.json()
+  return data
+}
+
 export async function fetchRecommend(payload) {
   const r = await fetch(apiUrl('/api/recommend'), {
     method: 'POST',

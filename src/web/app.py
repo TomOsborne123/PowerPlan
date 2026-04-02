@@ -291,6 +291,16 @@ def api_scrape_status():
     })
 
 
+@app.route("/api/export-price")
+def api_export_price():
+    """Indicative UK export rate (£/kWh) from public Octopus product data."""
+    from src.api.reference_export_price import fetch_reference_export_price_gbp_per_kwh
+
+    out = fetch_reference_export_price_gbp_per_kwh()
+    status = 200 if out.get("export_price_per_kwh") is not None else 503
+    return jsonify(out), status
+
+
 @app.route("/api/recommend", methods=["POST"])
 def api_recommend():
     """

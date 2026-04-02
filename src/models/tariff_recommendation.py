@@ -124,6 +124,13 @@ def recommend_tariff(
     if grid_price_ref <= 0:
         grid_price_ref = float(DEFAULT_PRICING.get("grid_price_per_kwh", 0.25))
 
+    solar_capex = float(
+        solar_type_params.get("solar_capex_per_kw", DEFAULT_PRICING["solar_capex_per_kw"])
+    )
+    wind_capex = float(
+        wind_type_params.get("wind_capex_per_kw", DEFAULT_PRICING["wind_capex_per_kw"])
+    )
+
     optimisation_result = get_optimised_system(
         latitude,
         longitude,
@@ -133,6 +140,8 @@ def recommend_tariff(
         pricing={
             "grid_price_per_kwh": grid_price_ref,
             "export_price_per_kwh": export_price_per_kwh,
+            "solar_capex_per_kw": solar_capex,
+            "wind_capex_per_kw": wind_capex,
         },
         solar_max_kw=solar_max_kw,
         wind_max_kw=wind_max_kw,
