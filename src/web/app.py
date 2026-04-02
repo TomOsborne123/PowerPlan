@@ -113,7 +113,10 @@ def _get_scrape_results(postcode: str) -> dict | None:
             "search_date": search_date_iso,
             "tariffs": tariffs,
         }
-    except Exception:
+    except Exception as e:
+        import traceback
+        print(f"[scrape-results] DB error for postcode={postcode!r}: {e}", flush=True)
+        traceback.print_exc()
         return None
 
 
@@ -173,6 +176,17 @@ def _run_scrape_job(postcode_norm: str, postcode_display: str, home_or_business:
         if code == 0:
             with _scrape_jobs_lock:
                 _scrape_jobs[postcode_norm] = {"status": "completed", "error": None}
+            # Quick sanity check: if the scrape said it succeeded but the DB has no rows,
+            # we likely have an RDS/permissions/config mismatch.
+            try:
+                seen = _get_scrape_results(postcode_norm)
+                has_rows = bool(seen and seen.get("tariffs"))
+                print(
+                    f"[scrape] Post-complete DB check for {postcode_display}: has_rows={has_rows}",
+                    flush=True,
+                )
+            except Exception as _e:
+                print(f"[scrape] Post-complete DB check failed: {_e}", flush=True)
             print(f"[scrape] Completed for postcode {postcode_display}", flush=True)
         else:
             excerpt = (tail.strip() or f"Scraper exited with code {code} (no output captured).")
