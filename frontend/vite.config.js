@@ -6,10 +6,8 @@ export default defineConfig({
   plugins: [react(), cesium()],
   root: '.',
   build: {
-    // Locally, we output into the Python app's static folder.
-    // On Netlify, we want a normal Vite build directory for static hosting.
-    outDir: process.env.NETLIFY ? 'dist' : '../src/web/static',
-    emptyOutDir: process.env.NETLIFY ? true : false,
+    outDir: '../src/web/static',
+    emptyOutDir: false,
   },
   server: {
     port: 5173,

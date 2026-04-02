@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react'
 
-/** Netlify / production: set VITE_API_BASE_URL to your Flask (or other) API origin. Local dev: leave unset (same-origin + Vite proxy). */
+/** If the UI is served separately from the API, set VITE_API_BASE_URL to the API origin. Local dev: leave unset (same-origin + Vite proxy). */
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')
 const apiUrl = (path) => {
   const p = path.startsWith('/') ? path : `/${path}`

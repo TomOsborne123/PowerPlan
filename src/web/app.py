@@ -27,7 +27,7 @@ app = Flask(__name__, static_folder="static", static_url_path="")
 # Resolve static_folder so it works when run from project root
 app.static_folder = os.path.join(os.path.dirname(__file__), "static")
 
-# Browser site on Netlify calls this API on another origin — set CORS_ORIGINS=https://your-site.netlify.app
+# If the browser UI is on another origin than this app, set CORS_ORIGINS (comma-separated origins).
 _cors_origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip()]
 if _cors_origins:
     CORS(app, resources={r"/api/*": {"origins": _cors_origins}})
