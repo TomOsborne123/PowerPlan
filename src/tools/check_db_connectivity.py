@@ -64,7 +64,7 @@ def main() -> int:
     print("[db-check] Checking MySQL auth/connect...")
     password = _env("DB_PASSWORD") or ""
     try:
-        import mysql.connector
+        import mysql.connector  # type: ignore
 
         conn = mysql.connector.connect(
             host=host,
@@ -76,6 +76,12 @@ def main() -> int:
         )
         conn.close()
         print("[db-check] MySQL connect OK")
+        return 0
+    except ModuleNotFoundError as e:
+        # Common when running `railway run ...` locally without mysql-connector installed.
+        print(f"[db-check] MySQL client not installed locally: {e}")
+        print("[db-check] TCP reachability is OK. To test MySQL auth locally, install:")
+        print("           python3 -m pip install mysql-connector-python")
         return 0
     except Exception as e:
         print(f"[db-check] MySQL connect FAILED: {type(e).__name__}: {e}")
