@@ -436,7 +436,39 @@ class ScrapeTariff:
                 })
 
                 print("Loading page...")
-                self.page.goto(url, wait_until='load')
+                nav_timeout_ms = int(float(os.environ.get("SCRAPER_NAV_TIMEOUT_MS", "90000")))
+                self.page.set_default_navigation_timeout(nav_timeout_ms)
+                self.page.set_default_timeout(nav_timeout_ms)
+
+                # Render/network can be slow and occasionally flaky; retry with progressively
+                # looser wait conditions instead of failing the whole scrape on first timeout.
+                nav_attempts = [
+                    ("load", nav_timeout_ms),
+                    ("domcontentloaded", nav_timeout_ms),
+                    ("commit", max(30000, nav_timeout_ms // 2)),
+                ]
+                last_nav_error = None
+                for idx, (wait_until, timeout_ms) in enumerate(nav_attempts, start=1):
+                    try:
+                        print(
+                            f"↻ goto attempt {idx}/{len(nav_attempts)} "
+                            f"(wait_until={wait_until}, timeout={timeout_ms}ms)"
+                        )
+                        self.page.goto(url, wait_until=wait_until, timeout=timeout_ms)
+                        last_nav_error = None
+                        break
+                    except Exception as e:
+                        last_nav_error = e
+                        print(f"⚠ goto attempt {idx} failed: {e}")
+                        # Lightweight recovery before retrying.
+                        try:
+                            self.page.wait_for_load_state("domcontentloaded", timeout=5000)
+                        except Exception:
+                            pass
+                        time.sleep(1.0)
+                if last_nav_error is not None:
+                    raise last_nav_error
+
                 time.sleep(_SCRAPE_AFTER_GOTO)
 
                 print(f"Page title: {self.page.title()}")
