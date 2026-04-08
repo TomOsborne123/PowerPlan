@@ -1,14 +1,17 @@
 import { useState, useEffect, useRef } from 'react'
-import { usePostcodeLookup, fetchRecommend, fetchScrapeResults, fetchRunScrape, fetchScrapeStatus, fetchExportPriceReference } from './api'
+import { usePostcodeLookup, fetchRecommend, fetchScrapeResults, fetchRunScrape, fetchScrapeStatus, fetchExportPriceReference, fetchCostProjection } from './api'
 import {
   HEATING_SHARE_OPTIONS,
   HEAT_PUMP_OPTIONS,
   INSULATION_OPTIONS,
+  PROJECTION_SCENARIO_SOLAR_KW,
+  PROJECTION_SCENARIO_WIND_KW,
   SOLAR_TIER_INFO,
   WIND_TIER_INFO,
   copForHeatPumpTier,
 } from './optimiserConstants'
 import { ResultView } from './ResultView'
+import { CostProjectionView } from './CostProjectionView'
 import { ScrapeGlobe } from './ScrapeGlobe'
 import { CesiumFlyTo } from './CesiumFlyTo'
 import { InfoIcon } from './InfoIcon'
@@ -18,6 +21,7 @@ export function App() {
   const [latitude, setLatitude] = useState(null)
   const [longitude, setLongitude] = useState(null)
   const [postcodeDistrict, setPostcodeDistrict] = useState('')
+  const [addressName, setAddressName] = useState('')
   // Controls the single-screen "step" experience:
   // 1) Postcode input, 2) Scraping globe, 3) Optimiser inputs, 4) Graph + tariffs
   const [uiStep, setUiStep] = useState(1)
@@ -36,6 +40,8 @@ export function App() {
   const [optimizeOverYears, setOptimizeOverYears] = useState(5)
   const [preferGreen, setPreferGreen] = useState(false)
   const [homeOrBusiness, setHomeOrBusiness] = useState('home')
+  /** Scrapes tariffs with the right EV tariff filter: yes | interested | no */
+  const [evInterest, setEvInterest] = useState('interested')
   const [solarCapacityPct, setSolarCapacityPct] = useState(0)
   const [windCapacityPct, setWindCapacityPct] = useState(0)
   const [demandPct, setDemandPct] = useState(0)
@@ -49,6 +55,17 @@ export function App() {
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState(null)
   const [result, setResult] = useState(null)
+  const [projection, setProjection] = useState(null)
+  const [projectionYears, setProjectionYears] = useState(20)
+  const [projectionLoading, setProjectionLoading] = useState(false)
+  const [projectionScenarios, setProjectionScenarios] = useState([
+    'inc_baseline',
+    'inc_solar',
+    'inc_solar_wind',
+    'inc_full',
+  ])
+  const [projectionSolarTier, setProjectionSolarTier] = useState('mid')
+  const [projectionWindTier, setProjectionWindTier] = useState('mid')
   const debounceRef = useRef(null)
   const requestSeqRef = useRef(0)
   const stepAdvanceTimerRef = useRef(null)
@@ -150,7 +167,7 @@ export function App() {
       }
       setScraping(true)
       try {
-        await fetchRunScrape(norm, homeOrBusiness)
+        await fetchRunScrape(norm, homeOrBusiness, evInterest, addressName)
       } catch (err) {
         setError(err.message || 'Could not start scrape')
         setScraping(false)
@@ -259,6 +276,7 @@ export function App() {
     if (step === 2) return scraping || uiStep === 2
     if (step === 3) return scrapeLoaded
     if (step === 4) return Boolean(result)
+    if (step === 5) return Boolean(result)
     return false
   }
 
@@ -278,6 +296,10 @@ export function App() {
     }
     if (step === 4) {
       setUiStep(4)
+      return
+    }
+    if (step === 5) {
+      setUiStep(5)
       return
     }
     // step 2: only enable while scraping/loading is active
@@ -311,14 +333,16 @@ export function App() {
         if (showErrors) setError('Annual electricity use must be a valid non-negative number (floats allowed, e.g. 3527.5).')
         return false
       }
-      const solarMaxKw = Math.max(0, 20 * (1 + solarCapacityPct / 100))
-      const windMaxKw = Math.max(0, 10 * (1 + windCapacityPct / 100))
+      const solarOff = solarTier === 'none'
+      const windOff = windTier === 'none'
+      const solarMaxKw = solarOff ? 0 : Math.max(0, 20 * (1 + solarCapacityPct / 100))
+      const windMaxKw = windOff ? 0 : Math.max(0, 10 * (1 + windCapacityPct / 100))
       // Also scale the *minimum* capacities so the sliders reliably affect the optimiser result.
       // Without this, changing only the max bounds often doesn't move the optimal solution.
       const solarMinKwBase = 1.5 * (1 + solarCapacityPct / 100)
       const windMinKwBase = 0.5 * (1 + windCapacityPct / 100)
-      const solarMinKw = Math.max(0, Math.min(solarMaxKw, solarMinKwBase))
-      const windMinKw = Math.max(0, Math.min(windMaxKw, windMinKwBase))
+      const solarMinKw = solarOff ? 0 : Math.max(0, Math.min(solarMaxKw, solarMinKwBase))
+      const windMinKw = windOff ? 0 : Math.max(0, Math.min(windMaxKw, windMinKwBase))
       const exportPrice = Math.max(0, exportPricePerKwh * (1 + exportPricePct / 100))
       const heatPumpCop = copForHeatPumpTier(heatPumpTier)
       const data = await fetchRecommend({
@@ -342,6 +366,7 @@ export function App() {
       })
       if (reqId !== requestSeqRef.current) return false
       setResult(data)
+      setProjection(null)
       setUiStep(4)
       return true
     } catch (err) {
@@ -361,6 +386,49 @@ export function App() {
         if (background) setRefreshing(false)
         else setLoading(false)
       }
+    }
+  }
+
+  const runCostProjection = async ({ showErrors = true, background = false } = {}) => {
+    const norm = normalizePostcode(postcode)
+    const bestTariff = result?.ranking?.[0]?.tariff || result?.recommended_tariff
+    const usageRaw = (annualConsumptionKwh ?? '').toString().trim()
+    const usageBase = usageRaw === '' ? undefined : Number(usageRaw.replace(',', '.'))
+    const usage = usageBase == null ? undefined : Math.max(0, usageBase * (1 + demandPct / 100))
+    const heatPumpCop = copForHeatPumpTier(heatPumpTier)
+    const solarScenarioKw = Math.max(0, PROJECTION_SCENARIO_SOLAR_KW[projectionSolarTier] ?? PROJECTION_SCENARIO_SOLAR_KW.mid)
+    const windScenarioKw = Math.max(0, PROJECTION_SCENARIO_WIND_KW[projectionWindTier] ?? PROJECTION_SCENARIO_WIND_KW.mid)
+    if (!bestTariff) return false
+    if (background) setProjectionLoading(true)
+    else setLoading(true)
+    try {
+      const out = await fetchCostProjection({
+        postcode: norm,
+        latitude: latitude ?? undefined,
+        longitude: longitude ?? undefined,
+        annual_consumption_kwh: usage,
+        heating_fraction: heatingFraction,
+        heat_pump_cop: heatPumpCop,
+        export_price_per_kwh: Math.max(0, exportPricePerKwh * (1 + exportPricePct / 100)),
+        unit_rate_p_per_kwh: Number(bestTariff.unit_rate_p_per_kwh ?? bestTariff.unit_rate),
+        standing_charge_p_per_day: Number(bestTariff.standing_charge_p_per_day ?? bestTariff.standing_charge_day),
+        max_years: projectionYears,
+        baseline_insulation_r_value: 2.5,
+        upgraded_insulation_r_value: Math.max(4.0, insulationRValue),
+        scenario_solar_kw: solarScenarioKw,
+        scenario_wind_kw: windScenarioKw,
+        solar_tier: projectionSolarTier,
+        wind_tier: projectionWindTier,
+        tariff_label: `${bestTariff.supplier_name || 'Tariff'} — ${bestTariff.tariff_name || ''}`.trim(),
+      })
+      setProjection(out)
+      return true
+    } catch (err) {
+      if (showErrors) setError(err.message || 'Could not build cost projection')
+      return false
+    } finally {
+      if (background) setProjectionLoading(false)
+      else setLoading(false)
     }
   }
 
@@ -399,27 +467,65 @@ export function App() {
     uiStep,
   ])
 
+  useEffect(() => {
+    if (uiStep !== 5) return
+    if (!result || loading || scraping || refreshing) return
+    if (debounceRef.current) window.clearTimeout(debounceRef.current)
+    debounceRef.current = window.setTimeout(() => {
+      runCostProjection({ showErrors: true, background: true })
+    }, 350)
+    return () => {
+      if (debounceRef.current) window.clearTimeout(debounceRef.current)
+    }
+  }, [
+    uiStep,
+    result,
+    annualConsumptionKwh,
+    demandPct,
+    heatingFraction,
+    insulationRValue,
+    heatPumpTier,
+    projectionSolarTier,
+    projectionWindTier,
+    exportPricePerKwh,
+    exportPricePct,
+    projectionYears,
+  ])
+
   return (
     <div className="wrap">
       <div className="top-row">
         <h1>PowerPlan</h1>
-        <div className="step-dots" aria-label="Page navigation (steps)">
-          {[1, 2, 3, 4].map((s) => {
-            const enabled = stepAvailable(s)
-            const active = uiStep === s
-            return (
-              <button
-                key={s}
-                type="button"
-                className={`step-dot ${active ? 'active' : ''} ${enabled ? '' : 'disabled'}`}
-                onClick={() => goToStep(s)}
-                disabled={!canNavigate || !enabled}
-                aria-current={active ? 'page' : undefined}
-                aria-label={`Go to step ${s}`}
-                title={`Step ${s}`}
-              />
-            )
-          })}
+        <div className="top-row-right">
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={!result || loading || scraping || refreshing}
+            onClick={() => {
+              setUiStep(5)
+              runCostProjection({ showErrors: true, background: false })
+            }}
+          >
+            Cost projection
+          </button>
+          <div className="step-dots" aria-label="Page navigation (steps)">
+            {[1, 2, 3, 4, 5].map((s) => {
+              const enabled = stepAvailable(s)
+              const active = uiStep === s
+              return (
+                <button
+                  key={s}
+                  type="button"
+                  className={`step-dot ${active ? 'active' : ''} ${enabled ? '' : 'disabled'}`}
+                  onClick={() => goToStep(s)}
+                  disabled={!canNavigate || !enabled}
+                  aria-current={active ? 'page' : undefined}
+                  aria-label={`Go to step ${s}`}
+                  title={`Step ${s}`}
+                />
+              )
+            })}
+          </div>
         </div>
       </div>
 
@@ -468,6 +574,7 @@ export function App() {
                 onChange={(e) => {
                   setPostcode(e.target.value)
                   setPostcodeDistrict('')
+                  setAddressName('')
                   // Each postcode has its own saved usage; prevent carry-over from the previous postcode.
                   setAnnualConsumptionKwh('')
                   setUiStep(1)
@@ -496,6 +603,20 @@ export function App() {
                   {postcodeStatus.message}
                 </div>
               )}
+            </div>
+            <div>
+              <label htmlFor="address_name">
+                Address name (optional)
+                <InfoIcon text="Used when postcode search returns multiple addresses. Enter a distinctive part of your address (e.g. house number/name or street) so the scraper can choose the right dropdown option." />
+              </label>
+              <input
+                type="text"
+                id="address_name"
+                value={addressName}
+                onChange={(e) => setAddressName(e.target.value)}
+                placeholder="e.g. Flat 3, 14 High Street"
+                autoComplete="off"
+              />
             </div>
             <div>
               <label htmlFor="annual_consumption_kwh">
@@ -548,6 +669,47 @@ export function App() {
               </div>
 
               <div className="form-row">
+                <div>
+                  <label className="block-label">
+                    Electric vehicles
+                    <InfoIcon text="Comparison sites often ask whether you have an EV or are interested in one; this can change which electricity tariffs they show." />
+                  </label>
+                  <div className="radio-group" role="group" aria-label="Electric vehicle interest">
+                    <label className="radio-label">
+                      <input
+                        type="radio"
+                        name="ev_interest"
+                        value="yes"
+                        checked={evInterest === 'yes'}
+                        onChange={() => setEvInterest('yes')}
+                      />
+                      <span>Yes, I have an EV</span>
+                    </label>
+                    <label className="radio-label">
+                      <input
+                        type="radio"
+                        name="ev_interest"
+                        value="interested"
+                        checked={evInterest === 'interested'}
+                        onChange={() => setEvInterest('interested')}
+                      />
+                      <span>No EV yet, but interested</span>
+                    </label>
+                    <label className="radio-label">
+                      <input
+                        type="radio"
+                        name="ev_interest"
+                        value="no"
+                        checked={evInterest === 'no'}
+                        onChange={() => setEvInterest('no')}
+                      />
+                      <span>No / not interested</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              <div className="form-row">
                 <button type="button" className="btn" onClick={() => loadFromScrape(true)} disabled={loading || scraping}>
                   {scraping || loading ? 'Loading…' : 'Load usage & tariffs'}
                 </button>
@@ -581,7 +743,7 @@ export function App() {
             <div>
               <label htmlFor="insulation_r_value">
                 Home insulation (fabric)
-                <InfoIcon text="Roughly how good your walls, loft and draught-proofing are. Higher = less heat loss, so less demand to cover with solar/wind. Values are a model input (similar to thermal resistance), not a survey." />
+                <InfoIcon text="Roughly how good your walls, loft and draught-proofing are. Higher = less heat loss, so less demand to cover with solar/wind. Pick “No” to skip insulation-driven changes to heating demand. Values are a model input (similar to thermal resistance), not a survey." />
               </label>
               <select
                 id="insulation_r_value"
@@ -596,7 +758,7 @@ export function App() {
             <div>
               <label htmlFor="heat_pump_tier">
                 Heat pump type
-                <InfoIcon text="Air-source heat pumps turn electricity into heat more efficiently than old electric heaters. We use simple “budget / mid / premium” performance bands (COP). Follow the links for independent background — not a product recommendation." />
+                <InfoIcon text="Air-source heat pumps turn electricity into heat more efficiently than old electric heaters. Pick “No” if you do not want a heat pump modelled (COP 1). Other bands are simple performance assumptions — follow the links for background, not a product recommendation." />
               </label>
               <select
                 id="heat_pump_tier"
@@ -703,8 +865,10 @@ export function App() {
                 max={300}
                 step={50}
                 value={solarCapacityPct}
+                disabled={solarTier === 'none'}
                 onChange={(e) => setSolarCapacityPct(Number(e.target.value))}
               />
+              {solarTier === 'none' ? <p className="field-hint">Slider disabled — solar is not in the optimisation.</p> : null}
             </div>
             <div>
               <label htmlFor="wind_capacity_pct">
@@ -718,8 +882,10 @@ export function App() {
                 max={300}
                 step={50}
                 value={windCapacityPct}
+                disabled={windTier === 'none'}
                 onChange={(e) => setWindCapacityPct(Number(e.target.value))}
               />
+              {windTier === 'none' ? <p className="field-hint">Slider disabled — wind is not in the optimisation.</p> : null}
             </div>
           </div>
 
@@ -796,7 +962,7 @@ export function App() {
                   <div>
                     <label htmlFor="insulation_r_value_results">
                       Insulation
-                      <InfoIcon text="Fabric / insulation level for the model." />
+                      <InfoIcon text="Fabric / insulation level for the model. Choose “No” to skip insulation-driven changes to heating demand." />
                     </label>
                     <select
                       id="insulation_r_value_results"
@@ -811,7 +977,7 @@ export function App() {
                   <div>
                     <label htmlFor="heat_pump_tier_results">
                       Heat pump (COP ≈ {copForHeatPumpTier(heatPumpTier)})
-                      <InfoIcon text="Heat pump performance band." />
+                      <InfoIcon text="Choose “No” to exclude a heat pump (COP 1). Other bands model lower electricity use for the same heat." />
                     </label>
                     <select
                       id="heat_pump_tier_results"
@@ -827,32 +993,71 @@ export function App() {
 
                 <div className="form-row col2" style={{ marginTop: '0.35rem' }}>
                   <div>
-                    <label htmlFor="solar_capacity_pct">
+                    <label htmlFor="solar_tier_results">
+                      Solar
+                      <InfoIcon text="Pick “No” to fix solar at 0 kWp and rank tariffs on grid import only." />
+                    </label>
+                    <select
+                      id="solar_tier_results"
+                      value={solarTier}
+                      onChange={(e) => setSolarTier(e.target.value)}
+                    >
+                      {Object.entries(SOLAR_TIER_INFO).map(([k, v]) => (
+                        <option key={k} value={k}>
+                          {v.label} — {v.blurb}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label htmlFor="wind_tier_results">
+                      Wind
+                      <InfoIcon text="Pick “No” to fix wind at 0 kW and exclude it from the optimisation." />
+                    </label>
+                    <select
+                      id="wind_tier_results"
+                      value={windTier}
+                      onChange={(e) => setWindTier(e.target.value)}
+                    >
+                      {Object.entries(WIND_TIER_INFO).map(([k, v]) => (
+                        <option key={k} value={k}>
+                          {v.label} — {v.blurb}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="form-row col2" style={{ marginTop: '0.35rem' }}>
+                  <div>
+                    <label htmlFor="solar_capacity_pct_results">
                       Solar slider {solarCapacityPct}%
                       <InfoIcon text="Range slider: solar search bounds around 20 kW." />
                     </label>
                     <input
                       type="range"
-                      id="solar_capacity_pct"
+                      id="solar_capacity_pct_results"
                       min={-300}
                       max={300}
                       step={50}
                       value={solarCapacityPct}
+                      disabled={solarTier === 'none'}
                       onChange={(e) => setSolarCapacityPct(Number(e.target.value))}
                     />
                   </div>
                   <div>
-                    <label htmlFor="wind_capacity_pct">
+                    <label htmlFor="wind_capacity_pct_results">
                       Wind slider {windCapacityPct}%
                       <InfoIcon text="Range slider: wind search bounds around 10 kW." />
                     </label>
                     <input
                       type="range"
-                      id="wind_capacity_pct"
+                      id="wind_capacity_pct_results"
                       min={-300}
                       max={300}
                       step={50}
                       value={windCapacityPct}
+                      disabled={windTier === 'none'}
                       onChange={(e) => setWindCapacityPct(Number(e.target.value))}
                     />
                   </div>
@@ -894,6 +1099,25 @@ export function App() {
             }
           />
         </div>
+      )}
+
+      {uiStep === 5 && result && (
+        <CostProjectionView
+          projection={projection}
+          maxYears={projectionYears}
+          loading={projectionLoading || loading}
+          selectedScenarioIds={projectionScenarios}
+          projectionSolarTier={projectionSolarTier}
+          projectionWindTier={projectionWindTier}
+          onProjectionSolarTier={setProjectionSolarTier}
+          onProjectionWindTier={setProjectionWindTier}
+          onYearsChange={(v) => setProjectionYears(v)}
+          onToggleScenario={(id) => {
+            setProjectionScenarios((prev) => (
+              prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+            ))
+          }}
+        />
       )}
     </div>
   )

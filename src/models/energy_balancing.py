@@ -17,6 +17,7 @@ __all__ = [
     "get_generation",
     "get_optimised_system",
     "optimize_system_capacity",
+    "evaluate_fixed_capacities",
     "demand_after_insulation_and_heat_pump",
     "DEFAULT_PRICING",
 ]
@@ -503,6 +504,72 @@ def optimize_system_capacity(
     }
 
 
+def evaluate_fixed_capacities(
+    latitude: float,
+    longitude: float,
+    annual_consumption_kwh: float,
+    heating_fraction: float,
+    insulation_r_value: float,
+    heat_pump_cop: float,
+    solar_kw: float,
+    wind_kw: float,
+    solar_type_params: dict[str, Any],
+    wind_type_params: dict[str, Any],
+    *,
+    flux_source: Literal["forecast", "last_year_monthly"] = "last_year_monthly",
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> dict[str, float]:
+    """
+    Annual import/export and capex for fixed solar/wind sizes (no optimisation).
+    Uses the same demand model as get_optimised_system and weather flux for generation.
+    """
+    demand_adj = demand_after_insulation_and_heat_pump(
+        annual_consumption_kwh,
+        heating_fraction,
+        insulation_r_value,
+        heat_pump_cop,
+    )
+    demand_for_optimisation = float(demand_adj["electricity_demand_for_optimisation_kwh"])
+
+    if flux_source == "last_year_monthly":
+        flux = get_flux_monthly_last_year(latitude, longitude)
+        flux_frequency: Literal["daily", "monthly"] = "monthly"
+    else:
+        if start_date is None or end_date is None:
+            start_date = datetime.utcnow().date().isoformat()
+            end_date = (datetime.utcnow().date() + timedelta(days=6)).isoformat()
+        flux = get_flux_daily(latitude, longitude, start_date, end_date, use_archive=False)
+        flux_frequency = "daily"
+
+    sk = max(0.0, float(solar_kw))
+    wk = max(0.0, float(wind_kw))
+    if flux_frequency == "monthly":
+        annual_solar, annual_wind = _annual_generation_from_flux_monthly(
+            flux, sk, wk, solar_type_params, wind_type_params
+        )
+    else:
+        annual_solar, annual_wind = _annual_generation_from_flux(
+            flux, sk, wk, solar_type_params, wind_type_params
+        )
+    total_gen = annual_solar + annual_wind
+    annual_import = max(0.0, demand_for_optimisation - total_gen)
+    annual_export = max(0.0, total_gen - demand_for_optimisation)
+    solar_capex_per_kw = float(solar_type_params.get("solar_capex_per_kw", DEFAULT_PRICING["solar_capex_per_kw"]))
+    wind_capex_per_kw = float(wind_type_params.get("wind_capex_per_kw", DEFAULT_PRICING["wind_capex_per_kw"]))
+    capex = sk * solar_capex_per_kw + wk * wind_capex_per_kw
+    return {
+        "annual_demand_kwh": round(demand_for_optimisation, 1),
+        "annual_import_kwh": round(annual_import, 1),
+        "annual_export_kwh": round(annual_export, 1),
+        "annual_generation_kwh": round(total_gen, 1),
+        "solar_kw": round(sk, 2),
+        "wind_kw": round(wk, 2),
+        "capex_gbp": round(capex, 2),
+        "insulation_r_value": float(insulation_r_value),
+    }
+
+
 def get_optimised_system(
     latitude: float,
     longitude: float,
@@ -609,6 +676,11 @@ def get_optimised_system(
         flux = get_flux_daily(latitude, longitude, start_date, end_date, use_archive=False)
         flux_frequency = "daily"
     pr = {**DEFAULT_PRICING, **(pricing or {})}
+    # If neither solar nor wind is allowed, the only feasible point is 0 kW / 0 kW; relax the
+    # default min-% self-gen constraint so grid-only scoring still runs.
+    _min_met_pct = float(min_demand_met_from_gen_pct)
+    if max(0.0, float(solar_max_kw)) <= 0.0 and max(0.0, float(wind_max_kw)) <= 0.0:
+        _min_met_pct = 0.0
     result = optimize_system_capacity(
         flux,
         demand_for_optimisation,
@@ -623,7 +695,7 @@ def get_optimised_system(
         step_kw=step_kw,
         optimize_over_years=optimize_over_years,
         flux_frequency=flux_frequency,
-        min_demand_met_from_gen_pct=min_demand_met_from_gen_pct,
+        min_demand_met_from_gen_pct=_min_met_pct,
         min_solar_kw=min_solar_kw,
         min_wind_kw=min_wind_kw,
         monthly_demand_kwh=monthly_demand_kwh if flux_frequency == "monthly" else None,

@@ -2,16 +2,23 @@
  * Copy and illustrative £/kWp (solar) / £/kW (wind) for MVP — aligned with src/data/energy_tiers.py
  */
 export const SOLAR_TIER_INFO = {
+  none: { label: "No — I don't want solar", capexPerKw: 0, blurb: 'Solar is fixed at 0 kWp and excluded from the search.' },
   budget: { label: 'Budget', capexPerKw: 1250, blurb: 'Lower-cost kit; slightly lower yield assumptions.' },
   mid: { label: 'Mid', capexPerKw: 1600, blurb: 'Balanced cost and performance.' },
   premium: { label: 'Premium', capexPerKw: 1950, blurb: 'Higher-spec panels/inverter; better modelled output.' },
 }
 
 export const WIND_TIER_INFO = {
+  none: { label: "No — I don't want wind", capexPerKw: 0, blurb: 'Wind is fixed at 0 kW and excluded from the search.' },
   budget: { label: 'Budget', capexPerKw: 2300, blurb: 'Entry-level small wind assumptions.' },
   mid: { label: 'Mid', capexPerKw: 2750, blurb: 'Balanced turbine assumptions.' },
   premium: { label: 'Premium', capexPerKw: 3300, blurb: 'Higher-spec turbine / install assumptions.' },
 }
+
+/** Fixed kWp used only on the cost-projection step (independent of optimiser tier sliders). */
+export const PROJECTION_SCENARIO_SOLAR_KW = { budget: 3, mid: 4.5, premium: 6 }
+/** Fixed kW nominal used only on the cost-projection step. */
+export const PROJECTION_SCENARIO_WIND_KW = { budget: 1, mid: 2, premium: 3.5 }
 
 /** Share of yearly electricity use that goes to space heating (0–1). */
 export const HEATING_SHARE_OPTIONS = [
@@ -27,7 +34,7 @@ export const HEATING_SHARE_OPTIONS = [
  * Default matches “typical mixed UK stock with some loft/cavity improvement”.
  */
 export const INSULATION_OPTIONS = [
-  { value: 0, label: 'Minimal — model adds little extra insulation benefit' },
+  { value: 0, label: "No — I don't want insulation modelled (no change to heating demand)" },
   { value: 1.0, label: 'Basic — some loft; walls still fairly leaky' },
   { value: 2.5, label: 'Typical UK — loft + partial cavity / mixed stock (default)' },
   { value: 4.0, label: 'Good — solid retrofit (e.g. full cavity, thick loft)' },
@@ -38,7 +45,7 @@ export const HEAT_PUMP_OPTIONS = [
   {
     value: 'none',
     cop: 1.0,
-    label: 'No heat pump (ordinary electric heating)',
+    label: "No — I don't want a heat pump (ordinary electric heating, COP 1)",
     specUrl: 'https://www.energysavingtrust.org.uk/advice/electric-heating/',
   },
   {

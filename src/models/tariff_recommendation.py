@@ -10,7 +10,36 @@ from typing import Any, Literal
 
 from src.models.energy_balancing import get_optimised_system, DEFAULT_PRICING
 
-__all__ = ["recommend_tariff", "tariff_to_pricing_dict"]
+__all__ = [
+    "recommend_tariff",
+    "tariff_to_pricing_dict",
+    "coerce_unit_rate_pence_per_kwh",
+    "coerce_standing_charge_pence_per_day",
+]
+
+
+def coerce_unit_rate_pence_per_kwh(raw: float) -> float:
+    """
+    Model expects pence per kWh (e.g. 24.5). Some sources store £/kWh (e.g. 0.245) without scaling.
+    """
+    v = float(raw or 0)
+    if v <= 0:
+        return 0.0
+    if v < 2.0:
+        return v * 100.0
+    return v
+
+
+def coerce_standing_charge_pence_per_day(raw: float) -> float:
+    """
+    Model expects pence per day (e.g. 51). A bare £/day value (e.g. 0.52) is sometimes stored as 0.52.
+    """
+    v = float(raw or 0)
+    if v <= 0:
+        return 0.0
+    if v < 5.0:
+        return v * 100.0
+    return v
 
 
 def tariff_to_pricing_dict(tariff: Any) -> dict[str, Any]:
@@ -20,17 +49,19 @@ def tariff_to_pricing_dict(tariff: Any) -> dict[str, Any]:
     """
     if hasattr(tariff, "unit_rate"):
         return {
-            "unit_rate_p_per_kwh": float(tariff.unit_rate),
-            "standing_charge_p_per_day": float(tariff.standing_charge_day),
+            "unit_rate_p_per_kwh": coerce_unit_rate_pence_per_kwh(float(tariff.unit_rate)),
+            "standing_charge_p_per_day": coerce_standing_charge_pence_per_day(float(tariff.standing_charge_day)),
             "supplier_name": getattr(tariff, "new_supplier_name", "") or getattr(tariff, "supplier_name", ""),
-            "tariff_name": getattr(tariff, "tariff_name", "") or getattr(tariff, "tariff_name", ""),
+            "tariff_name": getattr(tariff, "tariff_name", "") or "",
             "is_green": bool(getattr(tariff, "is_green", False)),
             "annual_cost_new": float(getattr(tariff, "annual_cost_new", 0)),
         }
     if isinstance(tariff, dict):
+        ur = float(tariff.get("unit_rate", tariff.get("unit_rate_p_per_kwh", 0)))
+        sc = float(tariff.get("standing_charge_day", tariff.get("standing_charge_p_per_day", 0)))
         return {
-            "unit_rate_p_per_kwh": float(tariff.get("unit_rate", tariff.get("unit_rate_p_per_kwh", 0))),
-            "standing_charge_p_per_day": float(tariff.get("standing_charge_day", tariff.get("standing_charge_p_per_day", 0))),
+            "unit_rate_p_per_kwh": coerce_unit_rate_pence_per_kwh(ur),
+            "standing_charge_p_per_day": coerce_standing_charge_pence_per_day(sc),
             "supplier_name": str(tariff.get("new_supplier_name", tariff.get("supplier_name", ""))),
             "tariff_name": str(tariff.get("tariff_name", "")),
             "is_green": bool(tariff.get("is_green", False)),

@@ -22,6 +22,10 @@ from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 
 from src.db import mysql_config
+from src.models.tariff_recommendation import (
+    coerce_standing_charge_pence_per_day,
+    coerce_unit_rate_pence_per_kwh,
+)
 
 app = Flask(__name__, static_folder="static", static_url_path="")
 # Resolve static_folder so it works when run from project root
@@ -89,6 +93,7 @@ def _get_scrape_results(postcode: str) -> dict | None:
         if not rows:
             return None
         first = rows[0]
+        # True annual kWh; scraper maps “per month” site copy into this column (re-scrape if data predates that fix).
         usage = first.get("annual_electricity_kwh")
         if usage is None:
             usage = 3500  # fallback
@@ -161,17 +166,32 @@ def _run_scrape_subprocess(argv: list[str], cwd: Path) -> tuple[int, str]:
     return code, tail
 
 
-def _run_scrape_job(postcode_norm: str, postcode_display: str, home_or_business: str = "home") -> None:
+def _run_scrape_job(
+    postcode_norm: str,
+    postcode_display: str,
+    home_or_business: str = "home",
+    has_ev_slug: str = "interested",
+    address_name: str = "",
+) -> None:
     """Run scraper in a subprocess (avoids Playwright 'Event loop is closed' in threads)."""
     with _scrape_jobs_lock:
         _scrape_jobs[postcode_norm] = {"status": "running", "error": None}
     try:
         print(
-            f"[scrape] Starting subprocess for postcode {postcode_display} ({home_or_business}) ...",
+            f"[scrape] Starting subprocess for postcode {postcode_display} ({home_or_business}, has_ev={has_ev_slug}, address_name={address_name!r}) ...",
             flush=True,
         )
         # -u: unbuffered Python so prints appear while the scrape runs (pipes are not TTYs).
-        argv = [sys.executable, "-u", "-m", "src.web.run_scrape", postcode_display, home_or_business]
+        argv = [
+            sys.executable,
+            "-u",
+            "-m",
+            "src.web.run_scrape",
+            postcode_display,
+            home_or_business,
+            has_ev_slug,
+            address_name,
+        ]
         code, tail = _run_scrape_subprocess(argv, PROJECT_ROOT)
         if code == 0:
             with _scrape_jobs_lock:
@@ -260,6 +280,10 @@ def api_run_scrape():
     home_or_business = (data.get("home_or_business") or "home").strip().lower()
     if home_or_business not in ("home", "business"):
         home_or_business = "home"
+    has_ev_slug = (data.get("has_ev") or "interested").strip().lower()
+    if has_ev_slug not in ("yes", "no", "interested"):
+        has_ev_slug = "interested"
+    address_name = str(data.get("address_name") or "").strip()
     with _scrape_jobs_lock:
         existing = _scrape_jobs.get(postcode_norm)
         if existing and existing.get("status") == "running":
@@ -267,7 +291,7 @@ def api_run_scrape():
     postcode_for_cli = (postcode or "").strip() or postcode_norm
     thread = threading.Thread(
         target=_run_scrape_job,
-        args=(postcode_norm, postcode_for_cli, home_or_business),
+        args=(postcode_norm, postcode_for_cli, home_or_business, has_ev_slug, address_name),
         daemon=True,
     )
     thread.start()
@@ -348,6 +372,10 @@ def api_recommend():
         wind_max_kw = float(data.get("wind_max_kw", 10.0))
         min_solar_kw = float(data.get("min_solar_kw", 0.0))
         min_wind_kw = float(data.get("min_wind_kw", 0.5))
+        if solar_tier == "none":
+            solar_max_kw, min_solar_kw = 0.0, 0.0
+        if wind_tier == "none":
+            wind_max_kw, min_wind_kw = 0.0, 0.0
     except (TypeError, ValueError) as e:
         return jsonify({"error": f"Invalid input: {e}"}), 400
 
@@ -441,6 +469,131 @@ def api_recommend():
         out["monthly_balance"] = df.to_dict(orient="records") if hasattr(df, "to_dict") else []
 
     return jsonify(out)
+
+
+@app.route("/api/cost-projection", methods=["POST"])
+def api_cost_projection():
+    """
+    Cumulative cost vs years for incremental upgrade steps using one tariff’s unit rate and
+    standing charge. Each scenario adds on top of the previous: baseline → +solar → +wind → +insulation.
+    """
+    try:
+        data = request.get_json() or {}
+        latitude = float(data.get("latitude", 0))
+        longitude = float(data.get("longitude", 0))
+        annual_consumption_kwh = float(data.get("annual_consumption_kwh", 3500))
+        heating_fraction = float(data.get("heating_fraction", 0.6))
+        heat_pump_cop = float(data.get("heat_pump_cop", 3.0))
+        export_price_per_kwh = float(data.get("export_price_per_kwh", 0.05))
+        unit_rate_p = coerce_unit_rate_pence_per_kwh(float(data.get("unit_rate_p_per_kwh", 0)))
+        standing_p_day = coerce_standing_charge_pence_per_day(float(data.get("standing_charge_p_per_day", 0)))
+        max_years = int(float(data.get("max_years", 20)))
+        max_years = max(1, min(20, max_years))
+        baseline_insulation = float(data.get("baseline_insulation_r_value", 2.5))
+        upgraded_insulation = float(data.get("upgraded_insulation_r_value", 6.0))
+        scenario_solar_kw = float(data.get("scenario_solar_kw", 4.0))
+        scenario_wind_kw = float(data.get("scenario_wind_kw", 2.0))
+        solar_tier = (data.get("solar_tier") or "mid").lower()
+        wind_tier = (data.get("wind_tier") or "mid").lower()
+        if solar_tier == "none":
+            solar_tier = "mid"
+        if wind_tier == "none":
+            wind_tier = "mid"
+        tariff_label = str(data.get("tariff_label") or "Selected tariff")
+        scenario_ids = data.get("scenario_ids")
+    except (TypeError, ValueError) as e:
+        return jsonify({"error": f"Invalid input: {e}"}), 400
+
+    if unit_rate_p <= 0:
+        return jsonify({"error": "unit_rate_p_per_kwh required (p/kWh from your best or chosen tariff)"}), 400
+
+    from src.models.energy_balancing import evaluate_fixed_capacities
+    from src.data.energy_tiers import SOLAR_TIERS, WIND_TIERS
+
+    solar_params = SOLAR_TIERS.get(solar_tier, SOLAR_TIERS["mid"])
+    wind_params = WIND_TIERS.get(wind_tier, WIND_TIERS["mid"])
+    grid_gbp_per_kwh = unit_rate_p / 100.0
+    standing_gbp_per_year = 365.0 * (standing_p_day / 100.0)
+
+    # Incremental build: each step includes everything from the previous step.
+    scenario_defs = [
+        {
+            "id": "inc_baseline",
+            "label": f"1. Baseline — grid only (~R {baseline_insulation:g} insulation)",
+            "insulation_r_value": baseline_insulation,
+            "solar_kw": 0.0,
+            "wind_kw": 0.0,
+        },
+        {
+            "id": "inc_solar",
+            "label": f"2. + Solar (~{scenario_solar_kw:g} kWp), same insulation",
+            "insulation_r_value": baseline_insulation,
+            "solar_kw": scenario_solar_kw,
+            "wind_kw": 0.0,
+        },
+        {
+            "id": "inc_solar_wind",
+            "label": f"3. + Wind (~{scenario_wind_kw:g} kW) — solar + wind, same insulation",
+            "insulation_r_value": baseline_insulation,
+            "solar_kw": scenario_solar_kw,
+            "wind_kw": scenario_wind_kw,
+        },
+        {
+            "id": "inc_full",
+            "label": f"4. + Stronger insulation (~R {upgraded_insulation:g}) — all upgrades",
+            "insulation_r_value": upgraded_insulation,
+            "solar_kw": scenario_solar_kw,
+            "wind_kw": scenario_wind_kw,
+        },
+    ]
+    if isinstance(scenario_ids, list) and scenario_ids:
+        want = {str(x) for x in scenario_ids}
+        scenario_defs = [s for s in scenario_defs if s["id"] in want]
+
+    try:
+        series_out: list[dict] = []
+        for sc in scenario_defs:
+            ev = evaluate_fixed_capacities(
+                latitude,
+                longitude,
+                annual_consumption_kwh,
+                heating_fraction,
+                sc["insulation_r_value"],
+                heat_pump_cop,
+                sc["solar_kw"],
+                sc["wind_kw"],
+                solar_params,
+                wind_params,
+            )
+            imp = float(ev["annual_import_kwh"])
+            exp = float(ev["annual_export_kwh"])
+            annual_energy_cash = imp * grid_gbp_per_kwh - exp * export_price_per_kwh
+            annual_running_gbp = annual_energy_cash + standing_gbp_per_year
+            capex = float(ev["capex_gbp"])
+            cumulative = [round(capex + annual_running_gbp * y, 2) for y in range(1, max_years + 1)]
+            series_out.append({
+                "id": sc["id"],
+                "label": sc["label"],
+                "cumulative_gbp": cumulative,
+                "annual_running_gbp": round(annual_running_gbp, 2),
+                "capex_gbp": round(capex, 2),
+                "annual_import_kwh": ev["annual_import_kwh"],
+                "annual_export_kwh": ev["annual_export_kwh"],
+            })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+    return jsonify({
+        "years": list(range(1, max_years + 1)),
+        "max_years": max_years,
+        "tariff_label": tariff_label,
+        "export_price_per_kwh": export_price_per_kwh,
+        "unit_rate_p_per_kwh": unit_rate_p,
+        "standing_charge_p_per_day": standing_p_day,
+        "series": series_out,
+    })
 
 
 if __name__ == "__main__":

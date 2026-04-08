@@ -276,6 +276,19 @@ input::placeholder {
   gap: 0.75rem;
 }
 
+.top-row-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.65rem;
+  flex-shrink: 0;
+}
+
+.btn-sm {
+  padding: 0.32rem 0.65rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
 .step-dots {
   display: inline-flex;
   align-items: center;
@@ -528,7 +541,7 @@ input::placeholder {
 
 .ranking-list li {
   display: grid;
-  grid-template-columns: 2rem 1fr 6.4rem 8.3rem;
+  grid-template-columns: 2rem 1fr 6.6rem 7.6rem 6.4rem 8.3rem;
   align-items: center;
   padding: 0.6rem 0.75rem;
   border-bottom: 1px solid var(--border);
@@ -554,6 +567,13 @@ input::placeholder {
 .ranking-list .bill {
   font-family: var(--font-mono);
   font-weight: 600;
+  text-align: right;
+  color: var(--text-muted);
+}
+
+.ranking-list .unit,
+.ranking-list .standing {
+  font-family: var(--font-mono);
   text-align: right;
   color: var(--text-muted);
 }
@@ -592,6 +612,60 @@ input::placeholder {
   background: rgba(63, 185, 80, 0.95);
 }
 
+.ranking-list.ranking-list-compact li {
+  padding: 0.28rem 0.4rem;
+  gap: 0.4rem;
+  font-size: 0.72rem;
+  grid-template-columns: 1.35rem minmax(0, 1fr) 3.6rem 3.9rem 4rem 5.1rem;
+  align-items: start;
+}
+
+.ranking-list.ranking-list-compact .ranking-header {
+  padding-top: 0.22rem;
+  padding-bottom: 0.22rem;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.ranking-list.ranking-list-compact .rank {
+  width: 1.35rem;
+  font-size: 0.68rem;
+}
+
+.ranking-list.ranking-list-compact li.recommended-row {
+  border-radius: 6px;
+}
+
+.ranking-list.ranking-list-compact .tariff-name-wrap {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.15rem;
+}
+
+.ranking-list.ranking-list-compact .tariff-name-cell {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
+  line-height: 1.3;
+  word-break: break-word;
+  hyphens: auto;
+}
+
+.ranking-list.ranking-list-compact .green {
+  flex-shrink: 0;
+}
+
+.dashboard-right .ranking-menu {
+  max-height: 10.5rem;
+  overflow: auto;
+}
+
 .error-msg {
   color: var(--error);
   padding: 0.75rem;
@@ -605,6 +679,13 @@ input::placeholder {
   align-items: center;
   gap: 0.5rem;
   cursor: pointer;
+}
+
+.checkbox-group {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.35rem;
+  margin-top: 0.35rem;
 }
 
 .checkbox-label input {

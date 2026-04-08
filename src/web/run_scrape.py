@@ -3,7 +3,9 @@ Run the tariff scraper for a postcode as a standalone process.
 Used by the web app to avoid "Event loop is closed" when Playwright runs in a thread.
 
 Usage (from project root):
-  python -m src.web.run_scrape "BS1 1AA"
+  python -m src.web.run_scrape "BS1 1AA" [home|business] [yes|no|interested] [address_name]
+  Third arg maps to the comparison site EV question: yes=have an EV, no=not interested,
+  interested=no EV yet but considering. Defaults: home, interested (matches prior behaviour).
 Exit code 0 = success, 1 = failure.
 """
 
@@ -47,9 +49,19 @@ def _scraper_headless():
     return True
 
 
+_EV_SLUG_TO_ANSWER = {
+    "yes": "Yes",
+    "no": "No",
+    "interested": "No but interested",
+}
+
+
 def main() -> int:
     if len(sys.argv) < 2:
-        print("Usage: python -m src.web.run_scrape <postcode> [home|business]", file=sys.stderr)
+        print(
+            "Usage: python -m src.web.run_scrape <postcode> [home|business] [yes|no|interested] [address_name]",
+            file=sys.stderr,
+        )
         return 1
     postcode = sys.argv[1].strip()
     if len(postcode) < 5:
@@ -58,7 +70,15 @@ def main() -> int:
     home_or_business = (sys.argv[2].strip().lower() if len(sys.argv) > 2 else "home")
     if home_or_business not in ("home", "business"):
         home_or_business = "home"
-    print(f"[run_scrape] pid={os.getpid()} postcode={postcode!r} mode={home_or_business!r}", flush=True)
+    ev_slug = (sys.argv[3].strip().lower() if len(sys.argv) > 3 else "interested")
+    if ev_slug not in _EV_SLUG_TO_ANSWER:
+        ev_slug = "interested"
+    has_ev = _EV_SLUG_TO_ANSWER[ev_slug]
+    address_name = (sys.argv[4].strip() if len(sys.argv) > 4 else "")
+    print(
+        f"[run_scrape] pid={os.getpid()} postcode={postcode!r} mode={home_or_business!r} has_ev={has_ev!r} address_name={address_name!r}",
+        flush=True,
+    )
     scraper = None
     try:
         from src.api.energyScraping.ScrapeTariff import ScrapeTariff
@@ -69,8 +89,9 @@ def main() -> int:
             fuel_type="both",
             current_supplier="Octopus",
             pay_method="monthly_direct_debit",
-            has_ev="No but interested",
+            has_ev=has_ev,
             home_or_business=home_or_business,
+            address_name=address_name,
             headless=_scraper_headless(),
         )
         return 0

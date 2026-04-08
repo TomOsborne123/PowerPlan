@@ -46,6 +46,91 @@ def _debug_path(name: str) -> str:
         return name
 
 
+def _usage_text_to_annual_kwh(consumption_text: str) -> int | None:
+    """
+    Parse kWh from comparison-site usage copy (e.g. '2,900 kWh / year' or '242 kWh / month').
+    Returns annual kWh, scaling up when the site states a monthly figure.
+    """
+    if not consumption_text:
+        return None
+    match = re.search(r"([\d,]+)\s*kwh", consumption_text, re.IGNORECASE)
+    if not match:
+        return None
+    try:
+        value = int(match.group(1).replace(",", ""))
+    except ValueError:
+        return None
+    low = consumption_text.lower()
+    monthly_markers = ("/month", "/ month", "per month", "a month", "pcm", "p.m.", " monthly")
+    yearly_markers = ("/year", "/ year", "per year", "a year", "p.a.", "annum", "annual", "/yr", "/ yr")
+    if any(m in low for m in monthly_markers):
+        return value * 12
+    if any(m in low for m in yearly_markers):
+        return value
+    # Plain "X kWh" with no period: treat as annual (legacy pages often imply yearly usage).
+    return value
+
+
+def _tariff_card_annual_cost_gbp(cost_sub_value: str) -> float:
+    """Parse 'or £1,234 a year' vs '£103 a month' style strings into an annual £ total."""
+    if not cost_sub_value:
+        return 0.0
+    m = re.search(r"£\s*([\d,]+(?:\.\d+)?)", cost_sub_value)
+    if not m:
+        return 0.0
+    try:
+        val = float(m.group(1).replace(",", ""))
+    except ValueError:
+        return 0.0
+    low = cost_sub_value.lower()
+    if any(x in low for x in ("month", "/mo", " pcm", "p.m.")):
+        return val * 12.0
+    return val
+
+
+def _standing_charge_cell_to_pence_per_day(display_text: str) -> float:
+    """
+    Standing charge may be shown as pence/day or as £/month. Tariff model stores pence per day.
+    """
+    if not display_text:
+        return 0.0
+    t = display_text.replace("\u00a0", " ").strip()
+    low = t.lower()
+
+    def _gbp_month_to_pence_per_day(gbp_month: float) -> float:
+        days_per_month = 365.25 / 12.0
+        return round((gbp_month * 100.0) / days_per_month, 4)
+
+    if re.search(r"month|/mo\b|pcm|per\s+month", low):
+        m = re.search(r"£\s*([\d,]+(?:\.\d+)?)", t)
+        if m:
+            try:
+                return _gbp_month_to_pence_per_day(float(m.group(1).replace(",", "")))
+            except ValueError:
+                return 0.0
+    m = re.search(r"([\d,]+(?:\.\d+)?)\s*p", low)
+    if m:
+        try:
+            return float(m.group(1).replace(",", ""))
+        except ValueError:
+            return 0.0
+    m = re.search(r"£\s*([\d,]+(?:\.\d+)?)", t)
+    if m and not re.search(r"[\d,]+(?:\.\d+)?\s*p", low):
+        try:
+            gbp = float(m.group(1).replace(",", ""))
+        except ValueError:
+            gbp = 0.0
+        if gbp >= 5.0:
+            return _gbp_month_to_pence_per_day(gbp)
+    m = re.search(r"([\d,]+(?:\.\d+)?)", t)
+    if m:
+        try:
+            return float(m.group(1).replace(",", ""))
+        except ValueError:
+            return 0.0
+    return 0.0
+
+
 # Pacing between Playwright actions (seconds). Reduced vs original fixed sleeps;
 # increase any value here if MoneySupermarket starts flaking on slow loads.
 _SCRAPE_AFTER_GOTO = 2.0
@@ -293,6 +378,7 @@ class ScrapeTariff:
     def scrape(self,
                postcode: str,
                address_index: int = 0,
+               address_name: str = '',
                fuel_type: str = 'both',
                current_supplier: str = '',
                pay_method: str = 'monthly_direct_debit',
@@ -383,7 +469,7 @@ class ScrapeTariff:
                 self._step1_enter_email()
 
                 # STEP 2: Postcode and address
-                self._step2_postcode_and_address(postcode, address_index)
+                self._step2_postcode_and_address(postcode, address_index, address_name)
 
                 # STEP 3: Home or Business – user choice: "No, it's a home" or "Yes, it's a business"
                 self._step3_home_or_business(home_or_business)
@@ -391,6 +477,9 @@ class ScrapeTariff:
 
                 # STEP 4: Select fuel type
                 self._step4_select_fuel_type(fuel_type)
+
+                # STEP 4b: Supplier details (new required section on comparison form)
+                self._step4b_supplier_details(current_supplier)
 
                 # STEP 5: Select EV option
                 self._step5_select_ev(has_ev)
@@ -401,14 +490,46 @@ class ScrapeTariff:
                 # Wait for results to load (page may render cards via JS)
                 print("Waiting for results...")
                 time.sleep(_SCRAPE_RESULTS_POLL)
+                result_selectors = [
+                    ".results-new-item",
+                    "[data-testid*='result']",
+                    "[data-testid*='tariff']",
+                    ".tariff-card",
+                    ".deal-card",
+                    ".result-card",
+                    "article",
+                ]
                 # Wait for at least one result card or common container to appear
-                for selector in [".results-new-item", "[data-testid*='result']", "[data-testid*='tariff']", ".tariff-card", ".deal-card", ".result-card", "article"]:
+                for selector in result_selectors:
                     try:
-                        self.page.wait_for_selector(selector, timeout=8000)
+                        self.page.wait_for_selector(selector, timeout=12000)
                         time.sleep(_SCRAPE_AFTER_RESULTS_SELECTOR)
                         break
                     except Exception:
                         continue
+                # If still on enquiry form, click "See results" again and wait a bit longer.
+                try:
+                    if self.page.locator(".enquiry-view-new__form").first.is_visible(timeout=1000):
+                        retry_btn = self.page.locator(
+                            "button[data-qa='enquiry-submit-button'], button:has-text('See results')"
+                        ).first
+                        if retry_btn.is_visible(timeout=1000):
+                            retry_btn.scroll_into_view_if_needed()
+                            time.sleep(_SCRAPE_SHORT)
+                            retry_btn.click()
+                            print("↻ Clicked 'See results' again (still on enquiry form)")
+                            try:
+                                self.page.wait_for_load_state("networkidle", timeout=20000)
+                            except Exception:
+                                pass
+                            for selector in result_selectors:
+                                try:
+                                    self.page.wait_for_selector(selector, timeout=12000)
+                                    break
+                                except Exception:
+                                    continue
+                except Exception:
+                    pass
                 time.sleep(_SCRAPE_AFTER_RESULTS_SELECTOR)
 
                 # Get results HTML
@@ -686,12 +807,26 @@ class ScrapeTariff:
             print(f"✗ Error in step 1: {str(e)}")
             raise
 
-    def _step2_postcode_and_address(self, postcode: str, address_index: int):
+    def _step2_postcode_and_address(self, postcode: str, address_index: int, address_name: str = ''):
         """STEP 2: Enter postcode and select address"""
 
         print("\n--- STEP 2: Postcode & Address ---")
 
         try:
+            wanted = " ".join((address_name or "").strip().lower().split())
+            if wanted:
+                print(f"Address hint provided: {wanted!r}")
+
+            def _normalize_text(s: str) -> str:
+                return " ".join((s or "").strip().lower().split())
+
+            def _matches_wanted(s: str) -> bool:
+                if not wanted:
+                    return False
+                txt = _normalize_text(s)
+                if not txt:
+                    return False
+                return wanted in txt
             # Find and fill postcode input
             postcode_input = None
             selectors = [
@@ -786,6 +921,22 @@ class ScrapeTariff:
                             text = (option.text_content() or "").strip()
                             print(f"  {i}: {text[:60]}")
 
+                        if wanted:
+                            matched_idx = None
+                            for i, option in enumerate(options):
+                                txt = (option.text_content() or "").strip()
+                                if _matches_wanted(txt):
+                                    matched_idx = i
+                                    break
+                            if matched_idx is not None:
+                                address_dropdown.select_option(index=matched_idx)
+                                print(
+                                    f"✓ Selected address by name match: "
+                                    f"{(options[matched_idx].text_content() or '')[:80]}"
+                                )
+                                address_selected = True
+                                break
+
                         first_option_text = (options[0].text_content() or "").lower()
                         is_placeholder = any(
                             word in first_option_text for word in ("select", "choose", "please", "--", "pick")
@@ -831,6 +982,18 @@ class ScrapeTariff:
                             print(f"✓ Using visible <select> #{i} with {n} options")
                             sel.scroll_into_view_if_needed()
                             time.sleep(_SCRAPE_SHORT)
+                            if wanted:
+                                matched_idx = None
+                                for opt_idx, opt in enumerate(opts):
+                                    txt = (opt.text_content() or "").strip()
+                                    if _matches_wanted(txt):
+                                        matched_idx = opt_idx
+                                        break
+                                if matched_idx is not None:
+                                    sel.select_option(index=matched_idx)
+                                    address_selected = True
+                                    print(f"✓ Selected visible <select> option by address name at index {matched_idx}")
+                                    break
                             first = (opts[0].text_content() or "").lower()
                             skip = any(w in first for w in ("select", "choose", "please", "--", "pick"))
                             idx = address_index + (1 if skip else 0)
@@ -871,6 +1034,13 @@ class ScrapeTariff:
                             txt = (o.text_content() or "").strip().lower()
                             if not txt or any(x in txt for x in ("select", "choose address", "search")):
                                 continue
+                            if wanted and _matches_wanted(txt):
+                                o.scroll_into_view_if_needed()
+                                time.sleep(_SCRAPE_MICRO)
+                                o.click()
+                                print(f"✓ Clicked address list item by name via: {list_selector} → {txt[:80]}")
+                                address_selected = True
+                                break
                             if visible_idx == address_index:
                                 o.scroll_into_view_if_needed()
                                 time.sleep(_SCRAPE_MICRO)
@@ -894,6 +1064,8 @@ class ScrapeTariff:
                 time.sleep(_SCRAPE_PRE_CLICK)
 
             if not address_selected:
+                if wanted:
+                    print(f"⚠ Address name match not found for {wanted!r}; no fallback selection succeeded.")
                 print("✗ Failed to select address")
                 self.page.screenshot(path=_debug_path('step2_address_error.png'))
                 with open(_debug_path("step2_address_page.html"), "w", encoding="utf-8") as f:
@@ -1259,6 +1431,120 @@ class ScrapeTariff:
             self.page.screenshot(path=_debug_path('step4_error.png'))
             raise
 
+    def _step4b_supplier_details(self, current_supplier: str = ""):
+        """
+        STEP 4b: Fill supplier details required by newer flows.
+        """
+        print("\n--- STEP 4b: Supplier details ---")
+        supplier_hint = (current_supplier or "").strip()
+        try:
+            time.sleep(_SCRAPE_AFTER_CLICK)
+
+            same_selected = False
+            for sel in [
+                "label:has-text('Do you have the same supplier for both your gas and electricity?')",
+                ".enquiry-view-new__form__row:has-text('Do you have the same supplier for both your gas and electricity?')",
+            ]:
+                try:
+                    sec = self.page.locator(sel).first
+                    if not sec.is_visible(timeout=800):
+                        continue
+                    for yes_sel in ["label:has-text('Yes')", "button:has-text('Yes')", "[role='radio']:has-text('Yes')"]:
+                        try:
+                            yes = sec.locator(yes_sel).first
+                            if yes.is_visible(timeout=800):
+                                yes.click()
+                                print("✓ Selected same-supplier: Yes")
+                                same_selected = True
+                                break
+                        except Exception:
+                            continue
+                    break
+                except Exception:
+                    continue
+            if not same_selected:
+                print("⚠ Same-supplier section not found or not selectable")
+
+            time.sleep(_SCRAPE_SHORT)
+
+            supplier_selected = False
+            supplier_sections = [
+                ".enquiry-current-supplier-selector",
+                ".enquiry-view-new__form__row:has-text('Who is your current supplier?')",
+            ]
+            for sec_sel in supplier_sections:
+                try:
+                    sec = self.page.locator(sec_sel).first
+                    if not sec.is_visible(timeout=1000):
+                        continue
+                    if supplier_hint:
+                        try:
+                            hit = sec.locator(f"label:has-text('{supplier_hint}')").first
+                            if hit.is_visible(timeout=900):
+                                hit.click()
+                                print(f"✓ Selected current supplier: {supplier_hint}")
+                                supplier_selected = True
+                                break
+                        except Exception:
+                            pass
+                    labels = sec.locator("label")
+                    if labels.count() > 0:
+                        first = labels.first
+                        if first.is_visible(timeout=900):
+                            txt = (first.text_content() or "").strip()
+                            first.click()
+                            print(f"✓ Selected first supplier option: {txt[:60]}")
+                            supplier_selected = True
+                            break
+                except Exception:
+                    continue
+            if not supplier_selected:
+                print("⚠ Current supplier section not found or not selectable")
+
+            # 3) Payment type (if required): prefer Monthly Direct Debit.
+            payment_selected = False
+            for pay_sel in [
+                "label:has-text('Monthly Direct Debit')",
+                "input[name='dual-payments'][value='1']",
+            ]:
+                try:
+                    el = self.page.locator(pay_sel).first
+                    if el.is_visible(timeout=800):
+                        el.click()
+                        payment_selected = True
+                        print("✓ Selected payment type: Monthly Direct Debit")
+                        break
+                except Exception:
+                    continue
+            if not payment_selected:
+                print("⚠ Payment type section not found or not selectable")
+
+            # 4) Current tariff dropdown (if required): choose first non-placeholder option.
+            tariff_selected = False
+            for tariff_sel in [
+                "select[name='dual-tariffs']",
+                "select[id*='tariff' i]",
+                ".enquiry-tariff-selector select",
+            ]:
+                try:
+                    dd = self.page.locator(tariff_sel).first
+                    if not dd.is_visible(timeout=800):
+                        continue
+                    # Select by index skips placeholder in this flow.
+                    dd.select_option(index=1)
+                    tariff_selected = True
+                    print(f"✓ Selected current tariff via: {tariff_sel}")
+                    break
+                except Exception:
+                    continue
+            if not tariff_selected:
+                print("⚠ Current tariff selector not found or not selectable")
+
+            print("✓ Step 4b complete")
+        except Exception as e:
+            print(f"⚠ Error in Step 4b (non-critical): {e}")
+            print("Continuing to next step...")
+
     def _step5_select_ev(self, has_ev: str):
         """STEP 5: Select EV (electric vehicle) option"""
 
@@ -1286,6 +1572,22 @@ class ScrapeTariff:
 
             # Try to find and click the appropriate option
             ev_selected = False
+
+            # Prefer direct radio selection by known field name.
+            try:
+                ev_val = "NO"
+                if ev_question_lower in ['yes', 'y']:
+                    ev_val = "YES"
+                elif ev_question_lower in ['no but interested', 'no but considering', 'interested', 'considering']:
+                    ev_val = "CONSIDERING"
+                radio = self.page.locator(f"input[name='electric-vehicle-ownership-selector'][value='{ev_val}']").first
+                if radio.is_visible(timeout=1500):
+                    radio.check(force=True)
+                    ev_selected = True
+                    print(f"✓ Selected EV option via input value: {ev_val}")
+                    time.sleep(_SCRAPE_AFTER_CLICK)
+            except Exception:
+                pass
 
             for text in ev_options:
                 if ev_selected:
@@ -1350,6 +1652,17 @@ class ScrapeTariff:
                 # Don't raise error - EV question might be optional
                 print("⚠ Continuing without EV selection")
                 return
+
+            # Guard: if validation still says EV status missing, fail this step explicitly.
+            ev_still_invalid = False
+            try:
+                ev_error = self.page.locator("text=Must select an electric vehicle ownership status").first
+                if ev_error.is_visible(timeout=600):
+                    ev_still_invalid = True
+            except Exception:
+                ev_still_invalid = False
+            if ev_still_invalid:
+                raise Exception("EV validation still failing after selection")
 
             # Look for continue button
             time.sleep(_SCRAPE_PRE_CLICK)
@@ -1475,12 +1788,19 @@ class ScrapeTariff:
             )
             if cost_span:
                 text = cost_span.get_text(strip=True)
-                m = re.search(r"£([\d,]+)/yr", text)
+                m = re.search(r"£([\d,]+)/yr", text, re.IGNORECASE)
                 if m:
                     try:
                         annual_cost_ = int(m.group(1).replace(",", ""))
                     except ValueError:
                         pass
+                else:
+                    m = re.search(r"£([\d,]+)/mo", text, re.IGNORECASE)
+                    if m:
+                        try:
+                            annual_cost_ = int(m.group(1).replace(",", "")) * 12
+                        except ValueError:
+                            pass
 
             annual_electricity_kwh = None
             annual_gas_kwh = None
@@ -1502,19 +1822,46 @@ class ScrapeTariff:
                         if consumption_span:
                             consumption_text = consumption_span.get_text(strip=True)
                             print(f"  Found {fuel_type_text}: {consumption_text}")
-                            
-                            # Extract number from "7974 kWh / year" format
-                            match = re.search(r"([\d,]+)\s*kwh", consumption_text, re.IGNORECASE)
-                            if match:
-                                try:
-                                    value = int(match.group(1).replace(",", ""))
-                                    
-                                    if "gas" in fuel_type_text:
-                                        annual_gas_kwh = value
-                                    elif "electric" in fuel_type_text:
-                                        annual_electricity_kwh = value
-                                except ValueError:
-                                    pass
+                            value = _usage_text_to_annual_kwh(consumption_text)
+                            if value is not None:
+                                if "gas" in fuel_type_text:
+                                    annual_gas_kwh = value
+                                elif "electric" in fuel_type_text:
+                                    annual_electricity_kwh = value
+
+            # Fallbacks for newer/variant markup where usage appears outside .current-usage-overview.
+            if annual_electricity_kwh is None or annual_gas_kwh is None:
+                usage_blocks = self.soup.select(
+                    ".enquiry-usage-prepop__container__item, .enquiry-usage, [class*='usage-prepop']"
+                )
+                for block in usage_blocks:
+                    text = block.get_text(" ", strip=True)
+                    low = text.lower()
+                    value = _usage_text_to_annual_kwh(text)
+                    if value is None:
+                        continue
+                    if annual_electricity_kwh is None and "electric" in low:
+                        annual_electricity_kwh = value
+                    if annual_gas_kwh is None and "gas" in low:
+                        annual_gas_kwh = value
+
+            # Last-resort parse from full page text.
+            if annual_electricity_kwh is None or annual_gas_kwh is None:
+                page_text = self.soup.get_text(" ", strip=True)
+                if annual_gas_kwh is None:
+                    m = re.search(r"gas[^\\d]{0,40}([\\d,]+)\\s*kwh(?:\\s*/\\s*(year|yr|month|mo))?", page_text, re.IGNORECASE)
+                    if m:
+                        annual_gas_kwh = _usage_text_to_annual_kwh(f"{m.group(1)} kWh / {m.group(2) or 'year'}")
+                if annual_electricity_kwh is None:
+                    m = re.search(r"electric(?:ity)?[^\\d]{0,40}([\\d,]+)\\s*kwh(?:\\s*/\\s*(year|yr|month|mo))?", page_text, re.IGNORECASE)
+                    if m:
+                        annual_electricity_kwh = _usage_text_to_annual_kwh(f"{m.group(1)} kWh / {m.group(2) or 'year'}")
+
+            if annual_electricity_kwh is not None or annual_gas_kwh is not None:
+                print(
+                    f"  Parsed usage: electricity={annual_electricity_kwh} kWh/yr, "
+                    f"gas={annual_gas_kwh} kWh/yr"
+                )
             # Helper: get text within this card; try multiple selectors
             def get_card_text(selectors, default: str = "") -> str:
                 if isinstance(selectors, str):
@@ -1593,15 +1940,10 @@ class ScrapeTariff:
                             exit_fee = 0.0
                     break
 
-            # Annual cost is in the "or £1,234 a year" text
+            # Annual cost is in the "or £1,234 a year" / "£103 a month" style text
             cost_sub_value = get_card_text(".results-new-item-cost__sub_value", "")
             if cost_sub_value:
-                m = re.search(r"£\s*([\d,]+)", cost_sub_value)
-                if m:
-                    try:
-                        annual_cost_new = float(m.group(1).replace(",", ""))
-                    except ValueError:
-                        annual_cost_new = 0.0
+                annual_cost_new = _tariff_card_annual_cost_gbp(cost_sub_value)
 
             # --- Unit rate & standing charge (take Electricity column if present) ---
             unit_rate = 0.0
@@ -1641,19 +1983,29 @@ class ScrapeTariff:
                     text = value_el.get_text(" ", strip=True)
 
                     if "standing charge" in label:
-                        m = re.search(r"([\d.]+)", text)
-                        if m:
-                            try:
-                                standing_charge_day = float(m.group(1))
-                            except ValueError:
-                                standing_charge_day = 0.0
+                        standing_charge_day = _standing_charge_cell_to_pence_per_day(text)
                     elif "unit rate" in label:
-                        m = re.search(r"([\d.]+)", text)
-                        if m:
+                        text_lower = text.lower()
+                        m_gbp = re.search(r"£\s*([\d.]+)", text)
+                        if m_gbp:
                             try:
-                                unit_rate = float(m.group(1))
+                                unit_rate = float(m_gbp.group(1)) * 100.0
                             except ValueError:
                                 unit_rate = 0.0
+                        else:
+                            m_p = re.search(r"([\d.]+)\s*p\b", text_lower)
+                            if m_p:
+                                try:
+                                    unit_rate = float(m_p.group(1))
+                                except ValueError:
+                                    unit_rate = 0.0
+                            else:
+                                m = re.search(r"([\d.]+)", text)
+                                if m:
+                                    try:
+                                        unit_rate = float(m.group(1))
+                                    except ValueError:
+                                        unit_rate = 0.0
                         # --- Check if tariff is green/renewable ---
             is_green = False
             # Check for green-electricity-decal within tariff-decals

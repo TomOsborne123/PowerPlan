@@ -9,7 +9,7 @@ export function ResultView({ result, optimiserControls }) {
 
   function TariffName({ tariff }) {
     const text = `${tariff?.supplier_name || '—'} — ${tariff?.tariff_name || ''}`.trim()
-    return <span>{text}</span>
+    return <span className="tariff-name-cell" title={text}>{text}</span>
   }
 
   function typicalMonthlyWeights() {
@@ -75,7 +75,7 @@ export function ResultView({ result, optimiserControls }) {
             <div key={p.name} className="custom-hover-row">
               <span className="custom-hover-name">{p.name}</span>
               <span className="custom-hover-sep">:</span>
-              <span className="custom-hover-value">{p.value.toFixed(2)} kWh</span>
+              <span className="custom-hover-value">{p.value.toFixed(2)} kWh (this month)</span>
             </div>
           ))}
           {normalized.length === 0 ? <div className="custom-hover-value">—</div> : null}
@@ -112,6 +112,18 @@ export function ResultView({ result, optimiserControls }) {
     return Number.isFinite(v) ? v : null
   }
 
+  const unitRateForTariff = (tariff) => {
+    const v = Number(tariff?.unit_rate_p_per_kwh ?? tariff?.unit_rate)
+    if (!Number.isFinite(v)) return '—'
+    return `${(v / 100).toFixed(3)}`
+  }
+
+  const standingChargeForTariff = (tariff) => {
+    const v = Number(tariff?.standing_charge_p_per_day ?? tariff?.standing_charge_day)
+    if (!Number.isFinite(v)) return '—'
+    return `${(v / 100).toFixed(3)}`
+  }
+
   return (
     <div className="dashboard-layout">
       <div className="dashboard-left">
@@ -134,30 +146,36 @@ export function ResultView({ result, optimiserControls }) {
 
           <details className="ranking-menu" open>
             <summary>Graph ▾</summary>
+            <p className="field-hint" style={{ marginTop: 0 }}>
+              Each point is energy for that calendar month (kWh/month). Summary tiles above are full-year totals (kWh/yr or £/yr).
+            </p>
             <div className="graph-metric-notes">
               <span className="graph-metric">
-                Solar <InfoIcon text="Monthly solar generation (from the optimiser-chosen solar capacity)." />
+                Solar <InfoIcon text="Electricity generated in that month from the optimiser-chosen solar capacity (not an annual figure)." />
               </span>
               <span className="graph-metric">
-                Wind <InfoIcon text="Monthly wind generation (from the optimiser-chosen wind capacity)." />
+                Wind <InfoIcon text="Electricity generated in that month from the optimiser-chosen wind capacity (not an annual figure)." />
               </span>
               <span className="graph-metric">
-                Usage <InfoIcon text="Seasonally-weighted baseline annual demand before adjustments." />
+                Usage <InfoIcon text="Estimated electricity use in that month from your baseline annual demand and a typical UK seasonal split (before insulation / heat-pump adjustments)." />
               </span>
               <span className="graph-metric">
-                Usage after insulation <InfoIcon text="Heating demand after insulation (thermal kWh; before COP conversion)." />
+                Usage after insulation <InfoIcon text="Estimated thermal heating demand in that month after insulation (kWh in that month; before heat-pump COP)." />
               </span>
               <span className="graph-metric">
-                Optimiser demand <InfoIcon text="Electricity demand used for sizing solar/wind (after COP conversion). This can differ from baseline usage and from thermal demand." />
+                Optimiser demand <InfoIcon text="Modelled grid-side electricity demand in that month after COP (used with generation to size solar/wind). Months sum to the optimiser’s annual demand." />
               </span>
             </div>
             {chartData.length > 0 ? (
               <div style={{ width: '100%', height: 170 }}>
                 <ResponsiveContainer>
-                  <LineChart data={chartData} margin={{ top: 6, right: 12, left: 0, bottom: 2 }}>
+                  <LineChart data={chartData} margin={{ top: 6, right: 12, left: 4, bottom: 2 }}>
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis dataKey="month" />
-                    <YAxis />
+                    <YAxis
+                      width={44}
+                      label={{ value: 'kWh / month', angle: -90, position: 'insideLeft', offset: 10, style: { textAnchor: 'middle', fontSize: 11 } }}
+                    />
                     <Tooltip content={(props) => <CustomTooltip {...props} />} />
                     <Line type="monotone" dataKey="solar_kwh" name="Sol" stroke="#f59e0b" strokeWidth={2} dot={false} />
                     <Line type="monotone" dataKey="wind_kwh" name="Wind" stroke="#60a5fa" strokeWidth={2} dot={false} />
@@ -187,20 +205,24 @@ export function ResultView({ result, optimiserControls }) {
             <InfoIcon text="Tariff ranking scored using the optimiser's solar/wind import/export and the chosen export price." />
           </h2>
           {best ? (
-            <ul className="ranking-list">
+            <ul className="ranking-list ranking-list-compact">
               <li className="ranking-header" aria-hidden="true">
                 <span className="rank">#</span>
                 <span>Tariff</span>
+                <span className="unit">Unit (£/kWh)</span>
+                <span className="standing">Standing (£/day)</span>
                 <span className="bill">Bill (£/yr)</span>
                 <span className="total">Total incl capex (£/yr)</span>
               </li>
               {result.ranking && result.ranking[0] ? (
                 <li className="recommended-row">
                   <span className="rank">#1</span>
-                  <span>
+                  <span className="tariff-name-wrap">
                     <TariffName tariff={result.ranking[0].tariff} />
                     {result.ranking[0].tariff.is_green && <span className="green"> ●</span>}
                   </span>
+                  <span className="unit">{unitRateForTariff(result.ranking[0].tariff)}</span>
+                  <span className="standing">{standingChargeForTariff(result.ranking[0].tariff)}</span>
                   <span className="bill">
                     {annualBillFor(result.ranking[0]) != null ? `£${annualBillFor(result.ranking[0]).toFixed(2)}` : '—'}
                   </span>
@@ -211,10 +233,12 @@ export function ResultView({ result, optimiserControls }) {
               ) : (
                 <li className="recommended-row">
                   <span className="rank">#1</span>
-                  <span>
+                  <span className="tariff-name-wrap">
                     <TariffName tariff={best} />
                     {best.is_green && <span className="green"> ●</span>}
                   </span>
+                  <span className="unit">{unitRateForTariff(best)}</span>
+                  <span className="standing">{standingChargeForTariff(best)}</span>
                   <span className="bill">—</span>
                   <span className="total">—</span>
                 </li>
@@ -226,20 +250,24 @@ export function ResultView({ result, optimiserControls }) {
 
           <details className="ranking-menu" open={true}>
             <summary>Tariff ranking ▾</summary>
-            <ul className="ranking-list">
+            <ul className="ranking-list ranking-list-compact">
               <li className="ranking-header" aria-hidden="true">
                 <span className="rank">#</span>
                 <span>Tariff</span>
+                <span className="unit">Unit (£/kWh)</span>
+                <span className="standing">Standing (£/day)</span>
                 <span className="bill">Bill (£/yr)</span>
                 <span className="total">Total incl capex (£/yr)</span>
               </li>
               {(result.ranking || []).slice(1).map((r) => (
                 <li key={r.rank} className="">
                   <span className="rank">#{r.rank}</span>
-                  <span>
+                  <span className="tariff-name-wrap">
                     <TariffName tariff={r.tariff} />
                     {r.tariff.is_green && <span className="green"> ●</span>}
                   </span>
+                  <span className="unit">{unitRateForTariff(r.tariff)}</span>
+                  <span className="standing">{standingChargeForTariff(r.tariff)}</span>
                   <span className="bill">
                     {annualBillFor(r) != null ? `£${annualBillFor(r).toFixed(2)}` : '—'}
                   </span>

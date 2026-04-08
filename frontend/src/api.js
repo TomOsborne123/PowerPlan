@@ -66,14 +66,24 @@ export async function fetchScrapeResults(postcode) {
   return data
 }
 
-/** Start a background scrape for postcode. homeOrBusiness: 'home' | 'business'. Returns { status: 'started', postcode } or throws. */
-export async function fetchRunScrape(postcode, homeOrBusiness = 'home') {
+/**
+ * Start a background scrape for postcode.
+ * homeOrBusiness: 'home' | 'business'
+ * hasEv: 'yes' | 'no' | 'interested' — maps to the comparison site EV question (have EV / not interested / considering).
+ */
+export async function fetchRunScrape(postcode, homeOrBusiness = 'home', hasEv = 'interested', addressName = '') {
   const norm = normalizePostcode(postcode)
   if (!norm) throw new Error('Postcode required')
+  const slug = hasEv === 'yes' || hasEv === 'no' ? hasEv : 'interested'
   const r = await fetch(apiUrl('/api/run-scrape'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ postcode: norm, home_or_business: homeOrBusiness === 'business' ? 'business' : 'home' }),
+    body: JSON.stringify({
+      postcode: norm,
+      home_or_business: homeOrBusiness === 'business' ? 'business' : 'home',
+      has_ev: slug,
+      address_name: (addressName || '').trim(),
+    }),
   })
   const data = await r.json()
   if (!r.ok) throw new Error(data.error || 'Failed to start scrape')
@@ -98,6 +108,17 @@ export async function fetchExportPriceReference() {
 
 export async function fetchRecommend(payload) {
   const r = await fetch(apiUrl('/api/recommend'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  const data = await r.json()
+  if (!r.ok) throw new Error(data.error || 'Request failed')
+  return data
+}
+
+export async function fetchCostProjection(payload) {
+  const r = await fetch(apiUrl('/api/cost-projection'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
