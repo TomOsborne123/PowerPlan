@@ -652,7 +652,7 @@ export function App() {
                         checked={homeOrBusiness === 'home'}
                         onChange={() => setHomeOrBusiness('home')}
                       />
-                      <span>No, it&apos;s a home</span>
+                      <span>Home</span>
                     </label>
                     <label className="radio-label">
                       <input
@@ -662,7 +662,7 @@ export function App() {
                         checked={homeOrBusiness === 'business'}
                         onChange={() => setHomeOrBusiness('business')}
                       />
-                      <span>Yes, it&apos;s a business</span>
+                      <span>Business</span>
                     </label>
                   </div>
                 </div>
