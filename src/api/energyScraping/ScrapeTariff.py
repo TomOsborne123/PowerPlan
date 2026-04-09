@@ -384,7 +384,8 @@ class ScrapeTariff:
                pay_method: str = 'monthly_direct_debit',
                has_ev: str = 'No',
                home_or_business: str = 'home',
-               headless: bool | str = False) -> List[Tariff]:
+               headless: bool | str = False,
+               _retry_on_target_closed: bool = True) -> List[Tariff]:
 
         _configure_live_stdio()
 
@@ -590,6 +591,29 @@ class ScrapeTariff:
 
         except Exception as e:
             print(f"❌ Error: {e}")
+            err_low = str(e).lower()
+            is_target_closed = (
+                "targetclosederror" in err_low
+                or "target page, context or browser has been closed" in err_low
+                or "page has been closed" in err_low
+            )
+            if is_target_closed and _retry_on_target_closed:
+                print("↻ TargetClosed detected; restarting browser and retrying scrape once...")
+                # Drop stale handles before retrying a clean browser session.
+                self.page = None
+                self.browser = None
+                return self.scrape(
+                    postcode=postcode,
+                    address_index=address_index,
+                    address_name=address_name,
+                    fuel_type=fuel_type,
+                    current_supplier=current_supplier,
+                    pay_method=pay_method,
+                    has_ev=has_ev,
+                    home_or_business=home_or_business,
+                    headless=headless,
+                    _retry_on_target_closed=False,
+                )
             if self.page:
                 try:
                     self.page.screenshot(path=_debug_path('error_screenshot.png'))
@@ -845,6 +869,14 @@ class ScrapeTariff:
         print("\n--- STEP 2: Postcode & Address ---")
 
         try:
+            def _is_target_closed_error(err: Exception) -> bool:
+                msg = str(err or "").lower()
+                return (
+                    "targetclosederror" in msg
+                    or "target page, context or browser has been closed" in msg
+                    or "page has been closed" in msg
+                )
+
             wanted = " ".join((address_name or "").strip().lower().split())
             if wanted:
                 print(f"Address hint provided: {wanted!r}")
@@ -991,6 +1023,11 @@ class ScrapeTariff:
                         if address_selected:
                             break
                     except Exception as e:
+                        if _is_target_closed_error(e):
+                            raise Exception(
+                                "Browser/page closed during address selection (TargetClosedError). "
+                                "Likely browser crash or container memory pressure."
+                            ) from e
                         print(f"  <select> {selector}: {type(e).__name__}")
                         continue
 
@@ -1035,6 +1072,11 @@ class ScrapeTariff:
                                 print(f"✓ Selected option index {idx}")
                                 break
                     except Exception as e:
+                        if _is_target_closed_error(e):
+                            raise Exception(
+                                "Browser/page closed during address selection (TargetClosedError). "
+                                "Likely browser crash or container memory pressure."
+                            ) from e
                         print(f"  Generic select scan: {type(e).__name__}")
 
                 if address_selected:
@@ -1084,6 +1126,11 @@ class ScrapeTariff:
                         if address_selected:
                             break
                     except Exception as e:
+                        if _is_target_closed_error(e):
+                            raise Exception(
+                                "Browser/page closed during address selection (TargetClosedError). "
+                                "Likely browser crash or container memory pressure."
+                            ) from e
                         print(f"  List {list_selector}: {type(e).__name__}")
                         continue
 
@@ -1099,10 +1146,14 @@ class ScrapeTariff:
                 if wanted:
                     print(f"⚠ Address name match not found for {wanted!r}; no fallback selection succeeded.")
                 print("✗ Failed to select address")
-                self.page.screenshot(path=_debug_path('step2_address_error.png'))
-                with open(_debug_path("step2_address_page.html"), "w", encoding="utf-8") as f:
-                    f.write(self.page.content())
-                print("Saved debug files: step2_address_error.png and step2_address_page.html")
+                try:
+                    if self.page is not None and not self.page.is_closed():
+                        self.page.screenshot(path=_debug_path('step2_address_error.png'))
+                        with open(_debug_path("step2_address_page.html"), "w", encoding="utf-8") as f:
+                            f.write(self.page.content())
+                        print("Saved debug files: step2_address_error.png and step2_address_page.html")
+                except Exception:
+                    pass
                 raise Exception("Could not select address from dropdown")
 
             # Submit address selection
@@ -1137,7 +1188,11 @@ class ScrapeTariff:
 
         except Exception as e:
             print(f"✗ Error in Step 2: {e}")
-            self.page.screenshot(path=_debug_path('step2_error.png'))
+            try:
+                if self.page is not None and not self.page.is_closed():
+                    self.page.screenshot(path=_debug_path('step2_error.png'))
+            except Exception:
+                pass
             raise
 
     def _step3_home_or_business(self, home_or_business: str = 'home'):
