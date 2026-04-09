@@ -16,6 +16,7 @@ import re
 from typing import List
 import re
 import requests
+from difflib import SequenceMatcher
 from typing import Dict, Optional
 from pathlib import Path
 import os
@@ -374,6 +375,139 @@ class ScrapeTariff:
         self.browser = None
         self.page = None
         self.location_data = None
+
+    def fetch_address_options(self, postcode: str, headless: bool | str = False) -> List[str]:
+        """
+        Open the comparison flow and return address dropdown options for a postcode.
+        This lets the UI present a real address picker before running the full scrape.
+        """
+        _configure_live_stdio()
+        url = "https://www.moneysupermarket.com/gas-and-electricity/"
+        options_out: List[str] = []
+        try:
+            print(f"-- Fetching address options for {postcode} --", flush=True)
+            with Camoufox(
+                headless=headless,
+                humanize=False,
+                args=["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"],
+            ) as browser:
+                self.browser = browser
+                self.page = browser.new_page()
+                self.page.set_extra_http_headers({
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Accept-Encoding': 'identity',
+                    'Accept-Language': 'en-GB,en;q=0.9',
+                })
+                nav_timeout_ms = int(float(os.environ.get("SCRAPER_NAV_TIMEOUT_MS", "90000")))
+                self.page.set_default_navigation_timeout(nav_timeout_ms)
+                self.page.set_default_timeout(nav_timeout_ms)
+                self.page.goto(url, wait_until="domcontentloaded", timeout=nav_timeout_ms)
+                time.sleep(_SCRAPE_AFTER_GOTO)
+
+                self._step0_cookies_and_start()
+                self._step1_enter_email()
+
+                postcode_input = None
+                for selector in [
+                    "#postcode",
+                    "input[name='postcode']",
+                    "input[name*='postcode']",
+                    "input[id*='postcode']",
+                    "input[placeholder*='postcode' i]",
+                    "input[type='text']",
+                ]:
+                    try:
+                        candidate = self.page.locator(selector).first
+                        if candidate.is_visible(timeout=3000):
+                            postcode_input = candidate
+                            break
+                    except Exception:
+                        continue
+                if postcode_input is None:
+                    raise Exception("Could not find postcode input field")
+                postcode_input.clear()
+                postcode_input.type(postcode, delay=40)
+                try:
+                    postcode_input.press("Enter")
+                except Exception:
+                    pass
+                time.sleep(_SCRAPE_POSTCODE_DOM)
+
+                for open_sel in [
+                    '[role="combobox"]',
+                    'input[aria-autocomplete="list"]',
+                    'input[aria-haspopup="listbox"]',
+                    '[data-testid*="address" i] input',
+                    'input[placeholder*="address" i]',
+                ]:
+                    try:
+                        loc = self.page.locator(open_sel).first
+                        if loc.is_visible(timeout=1000):
+                            loc.click(timeout=1500)
+                            break
+                    except Exception:
+                        continue
+
+                deadline = time.monotonic() + _SCRAPE_ADDRESS_UI_MAX_WAIT
+                collected: List[str] = []
+                while time.monotonic() < deadline and not collected:
+                    # Native <select>
+                    for selector in ["#address", "select[name*='address' i]", "select[id*='address' i]", "select[class*='address' i]"]:
+                        try:
+                            dd = self.page.locator(selector).first
+                            if not dd.is_visible(timeout=700):
+                                continue
+                            opts = dd.locator("option").all()
+                            for o in opts:
+                                txt = (o.text_content() or "").strip()
+                                if txt:
+                                    collected.append(txt)
+                            if collected:
+                                break
+                        except Exception:
+                            continue
+                    if collected:
+                        break
+                    # Custom list options
+                    for list_selector in [
+                        '[role="listbox"] [role="option"]',
+                        '[role="listbox"] li',
+                        "div[role='option']",
+                        '[data-testid*="address" i]',
+                        '[data-testid*="suggestion" i]',
+                        ".address-list li",
+                        '[class*="Address"] [class*="option" i]',
+                    ]:
+                        try:
+                            opts = self.page.locator(list_selector)
+                            cnt = opts.count()
+                            for j in range(min(cnt, 40)):
+                                t = (opts.nth(j).text_content() or "").strip()
+                                if t:
+                                    collected.append(t)
+                            if collected:
+                                break
+                        except Exception:
+                            continue
+                    if not collected:
+                        time.sleep(0.45)
+
+                # Clean and de-duplicate, drop placeholders.
+                seen = set()
+                for raw in collected:
+                    txt = " ".join(raw.split())
+                    low = txt.lower()
+                    if not txt:
+                        continue
+                    if any(p in low for p in ["please select", "choose", "select address", "see more", "search"]):
+                        continue
+                    if txt not in seen:
+                        seen.add(txt)
+                        options_out.append(txt)
+                return options_out
+        finally:
+            self.page = None
+            self.browser = None
 
     def scrape(self,
                postcode: str,
@@ -890,7 +1024,20 @@ class ScrapeTariff:
                 txt = _normalize_text(s)
                 if not txt:
                     return False
-                return wanted in txt
+                # Exact contains first.
+                if wanted in txt:
+                    return True
+                # Token overlap handles punctuation/order differences.
+                wanted_tokens = set([t for t in re.split(r"[^a-z0-9]+", wanted) if t])
+                txt_tokens = set([t for t in re.split(r"[^a-z0-9]+", txt) if t])
+                if wanted_tokens and txt_tokens:
+                    overlap = len(wanted_tokens & txt_tokens) / max(1, len(wanted_tokens))
+                    if overlap >= 0.6:
+                        return True
+                # Fuzzy similarity tolerates minor typos/spelling mistakes.
+                if SequenceMatcher(None, wanted, txt).ratio() >= 0.72:
+                    return True
+                return False
             # Find and fill postcode input
             postcode_input = None
             selectors = [

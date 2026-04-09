@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import 'cesium/Build/Cesium/Widgets/widgets.css'
 import {
   Viewer,
@@ -7,10 +7,16 @@ import {
   OpenStreetMapImageryProvider,
 } from 'cesium'
 
-export function CesiumFlyTo({ latitude, longitude, active, onReady }) {
+export function CesiumFlyTo({ latitude, longitude, active, flyTrigger = 0, onReady }) {
   const containerRef = useRef(null)
   const viewerRef = useRef(null)
   const readyRef = useRef(false)
+  const onReadyRef = useRef(onReady)
+  const [viewerMounted, setViewerMounted] = useState(false)
+
+  useEffect(() => {
+    onReadyRef.current = onReady
+  }, [onReady])
 
   useEffect(() => {
     if (!containerRef.current || viewerRef.current) return
@@ -54,7 +60,7 @@ export function CesiumFlyTo({ latitude, longitude, active, onReady }) {
     const markReady = () => {
       if (readyRef.current) return
       readyRef.current = true
-      if (typeof onReady === 'function') onReady()
+      if (typeof onReadyRef.current === 'function') onReadyRef.current()
     }
 
     // Fallback: never block UI if tiles/events don't behave as expected.
@@ -85,6 +91,7 @@ export function CesiumFlyTo({ latitude, longitude, active, onReady }) {
     })
 
     viewerRef.current = viewer
+    setViewerMounted(true)
 
     return () => {
       try {
@@ -102,9 +109,10 @@ export function CesiumFlyTo({ latitude, longitude, active, onReady }) {
         viewer.destroy()
       } finally {
         viewerRef.current = null
+        setViewerMounted(false)
       }
     }
-  }, [onReady])
+  }, [])
 
   useEffect(() => {
     const viewer = viewerRef.current
@@ -132,7 +140,7 @@ export function CesiumFlyTo({ latitude, longitude, active, onReady }) {
       duration: 1.8,
     })
     viewer.scene.requestRender()
-  }, [latitude, longitude, active])
+  }, [latitude, longitude, active, viewerMounted, flyTrigger])
 
   return <div ref={containerRef} className="scrape-globe-cesium" aria-hidden="true" />
 }

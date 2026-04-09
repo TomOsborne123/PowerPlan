@@ -12,6 +12,7 @@ import sys
 import threading
 import webbrowser
 from pathlib import Path
+import requests
 
 # Ensure project root is on path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -39,6 +40,49 @@ if _cors_origins:
 # In-memory status for background scrape jobs: postcode_norm -> {"status": "running"|"completed"|"failed", "error": str|None}
 _scrape_jobs: dict[str, dict] = {}
 _scrape_jobs_lock = threading.Lock()
+
+
+def _lookup_addresses_getaddress(postcode_norm: str) -> list[str]:
+    """
+    Fast UK address lookup via getAddress.io.
+    Returns [] when API key missing or lookup fails.
+    """
+    api_key = (os.environ.get("GETADDRESS_API_KEY") or "").strip()
+    if not api_key:
+        return []
+    # Keep timeout short: this endpoint is used interactively in the UI.
+    timeout_s = float(os.environ.get("ADDRESS_LOOKUP_TIMEOUT_S", "10"))
+    base = "https://api.getaddress.io/find"
+    url = f"{base}/{postcode_norm}"
+    try:
+        r = requests.get(
+            url,
+            params={"api-key": api_key, "expand": "true"},
+            timeout=timeout_s,
+        )
+        if r.status_code != 200:
+            print(f"[address-lookup] getAddress status={r.status_code} postcode={postcode_norm}", flush=True)
+            return []
+        data = r.json() or {}
+        raw_items = data.get("addresses") or []
+        out: list[str] = []
+        seen: set[str] = set()
+        for item in raw_items:
+            # expand=true returns dicts; without expand, strings.
+            if isinstance(item, dict):
+                parts = item.get("formatted_address") or []
+                text = ", ".join([str(p).strip() for p in parts if str(p).strip()])
+            else:
+                text = str(item or "").strip()
+            if not text:
+                continue
+            if text not in seen:
+                seen.add(text)
+                out.append(text)
+        return out
+    except Exception as e:
+        print(f"[address-lookup] getAddress error postcode={postcode_norm}: {e}", flush=True)
+        return []
 
 def _get_scrape_results(postcode: str) -> dict | None:
     """Load latest tariff scrape for postcode from DB. Returns None if DB unavailable or no data."""
@@ -172,13 +216,15 @@ def _run_scrape_job(
     home_or_business: str = "home",
     has_ev_slug: str = "interested",
     address_name: str = "",
+    address_index: int = 0,
 ) -> None:
     """Run scraper in a subprocess (avoids Playwright 'Event loop is closed' in threads)."""
     with _scrape_jobs_lock:
         _scrape_jobs[postcode_norm] = {"status": "running", "error": None}
     try:
         print(
-            f"[scrape] Starting subprocess for postcode {postcode_display} ({home_or_business}, has_ev={has_ev_slug}, address_name={address_name!r}) ...",
+            f"[scrape] Starting subprocess for postcode {postcode_display} "
+            f"({home_or_business}, has_ev={has_ev_slug}, address_name={address_name!r}, address_index={address_index}) ...",
             flush=True,
         )
         # -u: unbuffered Python so prints appear while the scrape runs (pipes are not TTYs).
@@ -191,6 +237,7 @@ def _run_scrape_job(
             home_or_business,
             has_ev_slug,
             address_name,
+            str(max(0, int(address_index))),
         ]
         code, tail = _run_scrape_subprocess(argv, PROJECT_ROOT)
         if code == 0:
@@ -265,6 +312,62 @@ def api_scrape_results():
     return jsonify(result)
 
 
+@app.route("/api/scrape-address-options", methods=["POST"])
+def api_scrape_address_options():
+    """Fetch selectable address options for a full postcode."""
+    data = request.get_json() or {}
+    postcode = (data.get("postcode") or "").strip()
+    postcode_norm = postcode.upper().replace(" ", "")
+    import re
+    full_re = re.compile(r"^[A-Z]{1,2}\d{1,2}[A-Z]?\d[A-Z]{2}$")
+    if not postcode_norm or not full_re.match(postcode_norm):
+        return jsonify({"error": "full postcode required (e.g. BS1 1AA)"}), 400
+    try:
+        # Prefer fast API lookup when key is configured.
+        options = _lookup_addresses_getaddress(postcode_norm)
+        if options:
+            return jsonify({
+                "postcode": postcode_norm,
+                "address_options": options,
+                "source": "getaddress",
+            })
+
+        # Slow browser fallback is optional: disable by default so UI stays fast.
+        allow_slow_fallback = (os.environ.get("ADDRESS_LOOKUP_ALLOW_SCRAPE_FALLBACK") or "").strip().lower() in (
+            "1", "true", "yes", "on"
+        )
+        if not allow_slow_fallback:
+            return jsonify({
+                "postcode": postcode_norm,
+                "address_options": [],
+                "source": "none",
+                "error": "Fast address lookup unavailable. Configure GETADDRESS_API_KEY (recommended).",
+            }), 503
+
+        # Fallback to scraper-driven options when explicitly enabled.
+        from src.api.energyScraping.ScrapeTariff import ScrapeTariff
+
+        raw = (os.environ.get("SCRAPER_HEADLESS") or "").strip().lower()
+        if raw in ("1", "true", "yes"):
+            headless_mode = True
+        elif raw in ("0", "false", "no"):
+            headless_mode = False
+        elif raw == "virtual":
+            headless_mode = "virtual"
+        else:
+            headless_mode = True
+
+        scraper = ScrapeTariff()
+        options = scraper.fetch_address_options(postcode_norm, headless=headless_mode)
+        return jsonify({
+            "postcode": postcode_norm,
+            "address_options": options,
+            "source": "scrape_fallback",
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/run-scrape", methods=["POST"])
 def api_run_scrape():
     """Start a background tariff scrape for the given postcode. Returns 202 when started."""
@@ -284,6 +387,10 @@ def api_run_scrape():
     if has_ev_slug not in ("yes", "no", "interested"):
         has_ev_slug = "interested"
     address_name = str(data.get("address_name") or "").strip()
+    try:
+        address_index = int(data.get("address_index", 0))
+    except (TypeError, ValueError):
+        address_index = 0
     with _scrape_jobs_lock:
         existing = _scrape_jobs.get(postcode_norm)
         if existing and existing.get("status") == "running":
@@ -291,7 +398,7 @@ def api_run_scrape():
     postcode_for_cli = (postcode or "").strip() or postcode_norm
     thread = threading.Thread(
         target=_run_scrape_job,
-        args=(postcode_norm, postcode_for_cli, home_or_business, has_ev_slug, address_name),
+        args=(postcode_norm, postcode_for_cli, home_or_business, has_ev_slug, address_name, max(0, address_index)),
         daemon=True,
     )
     thread.start()

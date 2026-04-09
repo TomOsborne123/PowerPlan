@@ -3,7 +3,7 @@ Run the tariff scraper for a postcode as a standalone process.
 Used by the web app to avoid "Event loop is closed" when Playwright runs in a thread.
 
 Usage (from project root):
-  python -m src.web.run_scrape "BS1 1AA" [home|business] [yes|no|interested] [address_name]
+  python -m src.web.run_scrape "BS1 1AA" [home|business] [yes|no|interested] [address_name] [address_index]
   Third arg maps to the comparison site EV question: yes=have an EV, no=not interested,
   interested=no EV yet but considering. Defaults: home, interested (matches prior behaviour).
 Exit code 0 = success, 1 = failure.
@@ -59,7 +59,7 @@ _EV_SLUG_TO_ANSWER = {
 def main() -> int:
     if len(sys.argv) < 2:
         print(
-            "Usage: python -m src.web.run_scrape <postcode> [home|business] [yes|no|interested] [address_name]",
+            "Usage: python -m src.web.run_scrape <postcode> [home|business] [yes|no|interested] [address_name] [address_index]",
             file=sys.stderr,
         )
         return 1
@@ -75,8 +75,13 @@ def main() -> int:
         ev_slug = "interested"
     has_ev = _EV_SLUG_TO_ANSWER[ev_slug]
     address_name = (sys.argv[4].strip() if len(sys.argv) > 4 else "")
+    try:
+        address_index = int(sys.argv[5].strip()) if len(sys.argv) > 5 else 0
+    except ValueError:
+        address_index = 0
     print(
-        f"[run_scrape] pid={os.getpid()} postcode={postcode!r} mode={home_or_business!r} has_ev={has_ev!r} address_name={address_name!r}",
+        f"[run_scrape] pid={os.getpid()} postcode={postcode!r} mode={home_or_business!r} has_ev={has_ev!r} "
+        f"address_name={address_name!r} address_index={address_index}",
         flush=True,
     )
     scraper = None
@@ -85,7 +90,7 @@ def main() -> int:
         scraper = ScrapeTariff()
         scraper.scrape(
             postcode=postcode,
-            address_index=0,
+            address_index=max(0, address_index),
             fuel_type="both",
             current_supplier="Octopus",
             pay_method="monthly_direct_debit",

@@ -66,12 +66,25 @@ export async function fetchScrapeResults(postcode) {
   return data
 }
 
+export async function fetchScrapeAddressOptions(postcode) {
+  const norm = normalizePostcode(postcode)
+  if (!norm) throw new Error('Postcode required')
+  const r = await fetch(apiUrl('/api/scrape-address-options'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ postcode: norm }),
+  })
+  const data = await r.json()
+  if (!r.ok) throw new Error(data.error || 'Could not load address options')
+  return data
+}
+
 /**
  * Start a background scrape for postcode.
  * homeOrBusiness: 'home' | 'business'
  * hasEv: 'yes' | 'no' | 'interested' — maps to the comparison site EV question (have EV / not interested / considering).
  */
-export async function fetchRunScrape(postcode, homeOrBusiness = 'home', hasEv = 'interested', addressName = '') {
+export async function fetchRunScrape(postcode, homeOrBusiness = 'home', hasEv = 'interested', addressName = '', addressIndex = 0) {
   const norm = normalizePostcode(postcode)
   if (!norm) throw new Error('Postcode required')
   const slug = hasEv === 'yes' || hasEv === 'no' ? hasEv : 'interested'
@@ -83,6 +96,7 @@ export async function fetchRunScrape(postcode, homeOrBusiness = 'home', hasEv = 
       home_or_business: homeOrBusiness === 'business' ? 'business' : 'home',
       has_ev: slug,
       address_name: (addressName || '').trim(),
+      address_index: Number.isFinite(Number(addressIndex)) ? Number(addressIndex) : 0,
     }),
   })
   const data = await r.json()
