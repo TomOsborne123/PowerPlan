@@ -23,6 +23,7 @@ import { CostProjectionView } from './CostProjectionView'
 import { ScrapeGlobe } from './ScrapeGlobe'
 import { CesiumFlyTo } from './CesiumFlyTo'
 import { InfoIcon } from './InfoIcon'
+import { FAVICON_PATH } from './branding'
 
 export function App() {
   const [postcode, setPostcode] = useState('')
@@ -548,7 +549,10 @@ export function App() {
   return (
     <div className="wrap">
       <div className="top-row">
-        <h1><img src="/favicon.png" alt="" className="title-logo" />PowerPlan</h1>
+        <h1>
+          <img src={FAVICON_PATH} alt="" className="title-logo" />
+          PowerPlan
+        </h1>
         <div className="top-row-right">
           <button
             type="button"
