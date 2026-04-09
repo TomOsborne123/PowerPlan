@@ -106,6 +106,41 @@ export function App() {
     }
   }, [uiStep])
 
+  useEffect(() => {
+    const base = 'PowerPlan'
+    const byStep = {
+      1: {
+        title: `${base} — Enter postcode`,
+        description: 'Enter your UK postcode and usage to start comparing energy tariffs and optimisation options.',
+      },
+      2: {
+        title: `${base} — Loading local tariffs`,
+        description: 'PowerPlan is locating your area and preparing tariff data for your postcode.',
+      },
+      3: {
+        title: `${base} — Optimiser setup`,
+        description: 'Answer setup questions for heating, insulation, technology cost bands, and comparison horizon.',
+      },
+      4: {
+        title: `${base} — Recommendation results`,
+        description: 'View recommended tariff ranking, annual bill estimates, and generation versus demand results.',
+      },
+      5: {
+        title: `${base} — Cost projection`,
+        description: 'Explore cumulative long-run costs by scenario with solar, wind, and insulation upgrades.',
+      },
+    }
+    const meta = byStep[uiStep] || byStep[1]
+    document.title = meta.title
+    let desc = document.querySelector('meta[name="description"]')
+    if (!desc) {
+      desc = document.createElement('meta')
+      desc.setAttribute('name', 'description')
+      document.head.appendChild(desc)
+    }
+    desc.setAttribute('content', meta.description)
+  }, [uiStep])
+
   // No scrolling: keep the UI within a single view.
 
   const normalizePostcode = (p) => (p || '').toUpperCase().replace(/\s+/g, '')
