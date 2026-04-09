@@ -276,6 +276,18 @@ input::placeholder {
   gap: 0.75rem;
 }
 
+.top-row h1 {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.title-logo {
+  height: 1.6em;
+  width: auto;
+  vertical-align: middle;
+}
+
 .top-row-right {
   display: inline-flex;
   align-items: center;

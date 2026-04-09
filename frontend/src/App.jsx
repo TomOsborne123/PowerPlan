@@ -548,7 +548,7 @@ export function App() {
   return (
     <div className="wrap">
       <div className="top-row">
-        <h1>PowerPlan</h1>
+        <h1><img src="/favicon.png" alt="" className="title-logo" />PowerPlan</h1>
         <div className="top-row-right">
           <button
             type="button"
