@@ -111,7 +111,7 @@ export function App() {
     const base = 'PowerPlan'
     const byStep = {
       1: {
-        title: `${base} — Enter postcode`,
+        title: 'PowerPlan - Home Energy Planning in the UK',
         description: 'Enter your UK postcode and usage to start comparing energy tariffs and optimisation options.',
       },
       2: {
