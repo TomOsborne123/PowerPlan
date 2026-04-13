@@ -906,20 +906,18 @@ input::placeholder {
 
 .scrape-progress-bar {
   height: 100%;
-  width: 35%;
-  min-width: 80px;
+  width: 0%;
+  min-width: 0;
   background: var(--accent);
   border-radius: 4px;
-  animation: scrape-progress-slide 1.6s ease-in-out infinite;
+  transition: width 0.35s ease-out;
 }
 
-@keyframes scrape-progress-slide {
-  0% {
-    transform: translateX(-100%);
-  }
-  100% {
-    transform: translateX(400%);
-  }
+.scrape-progress-hint {
+  margin: 0.35rem 0 0;
+  font-size: 0.72rem;
+  color: var(--muted);
+  min-height: 1.1em;
 }
 
 @keyframes pin-pulse {

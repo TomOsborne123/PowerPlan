@@ -39,6 +39,10 @@ export function App() {
   const [scrapeTariffCount, setScrapeTariffCount] = useState(null)
   const [scrapeTariffs, setScrapeTariffs] = useState([])
   const [scraping, setScraping] = useState(false)
+  /** True during the post-fly delay before `scraping` — keeps the AmCharts globe rotating. */
+  const [tariffScrapePending, setTariffScrapePending] = useState(false)
+  /** Approximate 0–100% while waiting for tariff scrape (time-based, not exact). */
+  const [scrapeProgressPct, setScrapeProgressPct] = useState(0)
   const [heatingFraction, setHeatingFraction] = useState(0.6)
   const [insulationRValue, setInsulationRValue] = useState(2.5)
   const [heatPumpTier, setHeatPumpTier] = useState('mid')
@@ -142,6 +146,29 @@ export function App() {
     desc.setAttribute('content', meta.description)
   }, [uiStep])
 
+  useEffect(() => {
+    if (uiStep !== 2) {
+      setScrapeProgressPct(0)
+      return
+    }
+    if (tariffScrapePending) {
+      const t0 = Date.now()
+      const id = window.setInterval(() => {
+        setScrapeProgressPct(Math.min(12, ((Date.now() - t0) / 9000) * 12))
+      }, 200)
+      return () => window.clearInterval(id)
+    }
+    if (scraping) {
+      const started = Date.now()
+      const id = window.setInterval(() => {
+        const elapsed = Date.now() - started
+        setScrapeProgressPct(Math.min(92, 12 + (elapsed / 130000) * 80))
+      }, 400)
+      return () => window.clearInterval(id)
+    }
+    setScrapeProgressPct(0)
+  }, [uiStep, tariffScrapePending, scraping])
+
   // No scrolling: keep the UI within a single view.
 
   const normalizePostcode = (p) => (p || '').toUpperCase().replace(/\s+/g, '')
@@ -216,7 +243,12 @@ export function App() {
         setGlobeSpinning(false)
         setGlobeLanded(true)
         setGlobeFlyTrigger((v) => v + 1)
-        await new Promise((r) => setTimeout(r, 1600))
+        setTariffScrapePending(true)
+        try {
+          await new Promise((r) => setTimeout(r, 1600))
+        } finally {
+          setTariffScrapePending(false)
+        }
       }
       setScraping(true)
       try {
@@ -320,6 +352,7 @@ export function App() {
     } finally {
       setLoading(false)
       setScraping(false)
+      setTariffScrapePending(false)
     }
   }
 
@@ -341,6 +374,7 @@ export function App() {
     if (step === 1) {
       setGlobeSpinning(false)
       setGlobeLanded(false)
+      setTariffScrapePending(false)
       setUiStep(1)
       return
     }
@@ -594,10 +628,16 @@ export function App() {
 
       {uiStep === 2 && (
         <div className="scrape-loading scrape-loading-global" role="status" aria-live="polite">
-          <p className="scrape-loading-label">{scraping ? 'Fetching tariff data…' : 'Loading…'}</p>
+          <p className="scrape-loading-label">
+            {scraping ? 'Fetching tariff data…' : tariffScrapePending ? 'Preparing tariff search…' : 'Loading…'}
+          </p>
           <div className="scrape-globe-wrap">
             <div className="scrape-globe">
-              <ScrapeGlobe latitude={latitude} longitude={longitude} spinning={globeSpinning && !globeLanded} />
+              <ScrapeGlobe
+                latitude={latitude}
+                longitude={longitude}
+                spinning={(globeSpinning && !globeLanded) || scraping || tariffScrapePending}
+              />
             </div>
             <div className={`scrape-globe scrape-globe-cesium-wrap ${globeVisualReady ? 'ready' : 'loading'}`}>
               <CesiumFlyTo
@@ -610,9 +650,21 @@ export function App() {
             </div>
           </div>
           <div className="hint">{postcodeDistrict ? `District: ${postcodeDistrict}` : 'District: locating…'}</div>
-          <div className="scrape-progress" aria-hidden="true">
-            <div className="scrape-progress-bar" />
-          </div>
+          {(scraping || tariffScrapePending) && (
+            <div
+              className="scrape-progress"
+              role="progressbar"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={Math.round(scrapeProgressPct)}
+              aria-label="Approximate tariff scrape progress"
+            >
+              <div className="scrape-progress-bar" style={{ width: `${scrapeProgressPct}%` }} />
+            </div>
+          )}
+          <p className="scrape-progress-hint">
+            {(scraping || tariffScrapePending) && 'Typical run is a few minutes; progress is approximate.'}
+          </p>
         </div>
       )}
 
@@ -641,6 +693,7 @@ export function App() {
                   setScrapeTariffCount(null)
                   setScrapeTariffs([])
                   setScraping(false)
+                  setTariffScrapePending(false)
                   setGlobeSpinning(false)
                   setGlobeLanded(false)
                 }}
