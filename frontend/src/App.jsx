@@ -24,6 +24,7 @@ import { ScrapeGlobe } from './ScrapeGlobe'
 import { CesiumFlyTo } from './CesiumFlyTo'
 import { InfoIcon } from './InfoIcon'
 import { FAVICON_PATH } from './branding'
+import { normalizePostcode, isOutwardOnlyPostcode, isFullPostcode } from './postcodeUtils'
 
 export function App() {
   const [postcode, setPostcode] = useState('')
@@ -171,9 +172,6 @@ export function App() {
 
   // No scrolling: keep the UI within a single view.
 
-  const normalizePostcode = (p) => (p || '').toUpperCase().replace(/\s+/g, '')
-  const isOutwardOnlyPostcode = (norm) => /^[A-Z]{1,2}\d{1,2}[A-Z]?$/.test(norm)
-  const isFullPostcode = (norm) => /^[A-Z]{1,2}\d{1,2}[A-Z]?\d[A-Z]{2}$/.test(norm)
   const normalizedPostcode = normalizePostcode(postcode)
   const postcodeInputValid = normalizedPostcode && (isOutwardOnlyPostcode(normalizedPostcode) || isFullPostcode(normalizedPostcode))
   const postcodeGeocodable = normalizedPostcode && isFullPostcode(normalizedPostcode)
@@ -260,7 +258,8 @@ export function App() {
         return false
       }
       // Poll until completed/failed. Treat long-lived "idle" as lost in-memory job (e.g. Gunicorn worker restart).
-      const pollIntervalMs = 5000
+      // How often we ask the server for scrape status (job runtime is unchanged; lower = snappier UI).
+      const pollIntervalMs = 3500
       let success = false
       let sawRunning = false
       let polls = 0

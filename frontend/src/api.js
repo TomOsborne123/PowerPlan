@@ -1,4 +1,5 @@
 import { useState, useCallback } from 'react'
+import { normalizePostcode, isFullPostcode } from './postcodeUtils'
 
 /** If the UI is served separately from the API, set VITE_API_BASE_URL to the API origin. Local dev: leave unset (same-origin + Vite proxy). */
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')
@@ -12,9 +13,6 @@ const DEFAULT_TARIFFS = [
   { supplier_name: 'British Gas', tariff_name: 'Standard', unit_rate: 28.2, standing_charge_day: 60, is_green: false },
   { supplier_name: 'EDF', tariff_name: 'Standard', unit_rate: 26.8, standing_charge_day: 52, is_green: true },
 ]
-
-const normalizePostcode = (p) => (p || '').toUpperCase().replace(/\s+/g, '')
-const isFullPostcode = (norm) => /^[A-Z]{1,2}\d{1,2}[A-Z]?\d[A-Z]{2}$/.test(norm)
 
 export function usePostcodeLookup(setLatitude, setLongitude) {
   const [status, setStatus] = useState({ message: '', ok: null })
