@@ -295,6 +295,13 @@ input::placeholder {
   flex-shrink: 0;
 }
 
+.page-function-text {
+  margin: 0.1rem 0 0.7rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.35;
+}
+
 .btn-sm {
   padding: 0.32rem 0.65rem;
   font-size: 0.82rem;

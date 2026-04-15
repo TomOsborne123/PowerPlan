@@ -579,6 +579,16 @@ export function App() {
     projectionYears,
   ])
 
+  const pageFunctionText = (
+    {
+      1: 'Start in seconds: enter your postcode and we will tailor options to your home.',
+      2: 'PowerPlan is now finding local tariffs and building your personalised comparison.',
+      3: 'Tell us your preferences so we can shape the smartest plan for your home.',
+      4: 'See your best-match tariffs, expected yearly costs, and energy performance at a glance.',
+      5: 'Explore future savings with clear side-by-side projections for every upgrade path.',
+    }[uiStep] || 'Plan, compare, and save with smarter home energy choices.'
+  )
+
   return (
     <div className="wrap">
       <div className="top-row">
@@ -618,6 +628,7 @@ export function App() {
           </div>
         </div>
       </div>
+      <p className="page-function-text">{pageFunctionText}</p>
 
       {error && (
         <div className="error-msg" role="alert">
