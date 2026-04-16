@@ -51,7 +51,7 @@ export function ResultView({ result, optimiserControls }) {
   function CustomTooltip({ active, payload, label }) {
     if (!active || !payload || payload.length === 0) return null
 
-    const orderedNames = ['Sol', 'Wind', 'Usage', 'Thermal', 'Opt demand']
+    const orderedNames = ['Solar', 'Wind', 'Usage', 'Heating with adjusted insulation', 'Net electricity demand']
     const normalized = payload
       .map((p) => {
         const v = typeof p?.value === 'number' ? p.value : Number(p?.value)
@@ -160,10 +160,10 @@ export function ResultView({ result, optimiserControls }) {
                 Usage <InfoIcon text="Estimated electricity use in that month from your baseline annual demand and a typical UK seasonal split (before insulation / heat-pump adjustments)." />
               </span>
               <span className="graph-metric">
-                Usage after insulation <InfoIcon text="Estimated thermal heating demand in that month after insulation (kWh in that month; before heat-pump COP)." />
+                Heating with adjusted insulation <InfoIcon text="Estimated monthly heating demand after the selected insulation level has reduced heat loss, before any heat-pump efficiency adjustment." />
               </span>
               <span className="graph-metric">
-                Optimiser demand <InfoIcon text="Modelled grid-side electricity demand in that month after COP (used with generation to size solar/wind). Months sum to the optimiser’s annual demand." />
+                Net electricity demand <InfoIcon text="Estimated monthly electricity demand after insulation and heat-pump effects are applied. This is the final demand the model compares against solar and wind generation." />
               </span>
             </div>
             <div className="chart-legend" aria-label="Graph legend">
@@ -181,11 +181,11 @@ export function ResultView({ result, optimiserControls }) {
               </span>
               <span className="chart-legend-item">
                 <span className="chart-legend-line thermal" aria-hidden="true" />
-                Usage after insulation
+                Heating with adjusted insulation
               </span>
               <span className="chart-legend-item">
                 <span className="chart-legend-line demand" aria-hidden="true" />
-                Optimiser demand
+                Net electricity demand
               </span>
             </div>
             {chartData.length > 0 ? (
@@ -199,11 +199,11 @@ export function ResultView({ result, optimiserControls }) {
                       label={{ value: 'kWh / month', angle: -90, position: 'insideLeft', offset: 10, style: { textAnchor: 'middle', fontSize: 11 } }}
                     />
                     <Tooltip content={(props) => <CustomTooltip {...props} />} />
-                    <Line type="monotone" dataKey="solar_kwh" name="Sol" stroke="#f59e0b" strokeWidth={2} dot={false} />
+                    <Line type="monotone" dataKey="solar_kwh" name="Solar" stroke="#f59e0b" strokeWidth={2} dot={false} />
                     <Line type="monotone" dataKey="wind_kwh" name="Wind" stroke="#60a5fa" strokeWidth={2} dot={false} />
                     <Line type="monotone" dataKey="usage_before_kwh" name="Usage" stroke="#f87171" strokeWidth={2} strokeDasharray="6 3" dot={false} />
-                    <Line type="monotone" dataKey="usage_after_kwh" name="Thermal" stroke="#34d399" strokeWidth={2} strokeDasharray="4 2" dot={false} />
-                    <Line type="monotone" dataKey="demand_kwh" name="Opt demand" stroke="#a78bfa" strokeWidth={2} dot={false} />
+                    <Line type="monotone" dataKey="usage_after_kwh" name="Heating with adjusted insulation" stroke="#34d399" strokeWidth={2} strokeDasharray="4 2" dot={false} />
+                    <Line type="monotone" dataKey="demand_kwh" name="Net electricity demand" stroke="#a78bfa" strokeWidth={2} dot={false} />
                   </LineChart>
                 </ResponsiveContainer>
               </div>
