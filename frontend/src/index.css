@@ -295,11 +295,20 @@ input::placeholder {
   flex-shrink: 0;
 }
 
+.app-overview-text {
+  margin: 0.1rem 0 0.35rem;
+  color: #dbe4f2;
+  font-size: 0.98rem;
+  line-height: 1.45;
+  max-width: 72rem;
+}
+
 .page-function-text {
-  margin: 0.1rem 0 0.7rem;
+  margin: 0.1rem 0 0.8rem;
   color: var(--muted);
   font-size: 0.9rem;
-  line-height: 1.35;
+  line-height: 1.45;
+  max-width: 72rem;
 }
 
 .btn-sm {

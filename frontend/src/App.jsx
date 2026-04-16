@@ -579,14 +579,16 @@ export function App() {
     projectionYears,
   ])
 
+  const appOverviewText =
+    'PowerPlan helps you compare UK electricity tariffs, estimate annual running costs, and explore how upgrades like solar, wind, insulation, and heat pumps could change your bills over time.'
   const pageFunctionText = (
     {
-      1: 'Start in seconds: enter your postcode and we will tailor options to your home.',
-      2: 'PowerPlan is now finding local tariffs and building your personalised comparison.',
-      3: 'Tell us your preferences so we can shape the smartest plan for your home.',
-      4: 'See your best-match tariffs, expected yearly costs, and energy performance at a glance.',
-      5: 'Explore future savings with clear side-by-side projections for every upgrade path.',
-    }[uiStep] || 'Plan, compare, and save with smarter home energy choices.'
+      1: 'This page gathers the key starting details for your plan. Enter your postcode, add an optional address hint to help match the property, and include your annual electricity use so PowerPlan can build a comparison around your home.',
+      2: 'This page is the data-loading stage. PowerPlan is locating your area, checking for saved results, and gathering tariff information so the rest of the journey is based on real options for your postcode.',
+      3: 'This page personalises your recommendation. You can tell PowerPlan how your home uses electricity and which upgrades you are open to, so the model can balance comfort, technology choices, and likely long-term value.',
+      4: 'This page shows your recommendation results. You can review the strongest tariff matches, expected yearly costs, and how generation and demand compare under the selected home energy setup.',
+      5: 'This page helps you think ahead. It compares long-term cumulative costs across different upgrade paths, making it easier to see where bigger upfront investment could lead to lower lifetime energy spend.',
+    }[uiStep] || 'PowerPlan compares tariffs and home energy upgrade choices to help you make a more confident decision.'
   )
 
   return (
@@ -628,6 +630,7 @@ export function App() {
           </div>
         </div>
       </div>
+      <p className="app-overview-text">{appOverviewText}</p>
       <p className="page-function-text">{pageFunctionText}</p>
 
       {error && (
