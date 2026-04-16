@@ -84,18 +84,22 @@ export function ResultView({ result, optimiserControls }) {
     )
   }
 
-  const tiles = [
-    { value: opt.optimal_solar_kw, label: 'Solar (kW)', info: 'Optimal solar capacity selected by the optimiser.' },
-    { value: opt.optimal_wind_kw, label: 'Wind (kW)', info: 'Optimal wind capacity selected by the optimiser.' },
-    { value: opt.total_capacity_kw, label: 'Total capacity (kW)', info: 'Solar + wind capacities added together.' },
-    { value: opt.annual_demand_kwh != null ? opt.annual_demand_kwh.toFixed(1) : '—', label: 'Annual demand (kWh)', info: 'Annual electricity demand used for optimisation.' },
-    { value: Math.round(opt.annual_generation_kwh), label: 'Annual generation (kWh)', info: 'Total annual generation from the chosen solar + wind sizes.' },
-    { value: Math.round(opt.annual_import_kwh), label: 'Import (kWh/yr)', info: 'Annual energy imported from the grid.' },
-    { value: Math.round(opt.annual_export_kwh), label: 'Export (kWh/yr)', info: 'Annual energy exported to the grid.' },
-    { value: `${opt.demand_met_from_generation_pct.toFixed(1)}%`, label: 'Demand from own gen', info: 'Percentage of your demand met by on-site solar + wind.' },
-    { value: `£${Math.round(opt.capex)}`, label: 'Capex', info: 'Total upfront cost (solar + wind) from the selected tier assumptions.' },
-    { value: opt.payback_solar_years != null ? `${opt.payback_solar_years} yr` : '—', label: 'Solar payback', info: 'Estimated years to recover solar capex from savings/revenue.' },
-    { value: opt.payback_wind_years != null ? `${opt.payback_wind_years} yr` : '—', label: 'Wind payback', info: 'Estimated years to recover wind capex from savings/revenue.' },
+  const systemSizingTiles = [
+    { value: opt.optimal_solar_kw, label: 'Solar size (kW)', info: 'Optimal solar capacity selected by the optimiser.' },
+    { value: opt.optimal_wind_kw, label: 'Wind size (kW)', info: 'Optimal wind capacity selected by the optimiser.' },
+    { value: opt.total_capacity_kw, label: 'Total generation size (kW)', info: 'Solar and wind capacities added together.' },
+  ]
+  const annualEnergyTiles = [
+    { value: opt.annual_demand_kwh != null ? opt.annual_demand_kwh.toFixed(1) : '—', label: 'Annual electricity demand (kWh)', info: 'Annual electricity demand used for optimisation.' },
+    { value: Math.round(opt.annual_generation_kwh), label: 'Annual generation (kWh)', info: 'Total annual generation from the selected solar and wind sizes.' },
+    { value: Math.round(opt.annual_import_kwh), label: 'Annual grid import (kWh)', info: 'Annual energy imported from the grid.' },
+    { value: Math.round(opt.annual_export_kwh), label: 'Annual grid export (kWh)', info: 'Annual energy exported to the grid.' },
+    { value: `${opt.demand_met_from_generation_pct.toFixed(1)}%`, label: 'Demand met by own generation', info: 'Percentage of your electricity demand met by on-site solar and wind.' },
+  ]
+  const investmentTiles = [
+    { value: `£${Math.round(opt.capex)}`, label: 'Upfront investment (capex)', info: 'Total upfront cost (solar + wind) from the selected tier assumptions.' },
+    { value: opt.payback_solar_years != null ? `${opt.payback_solar_years} yr` : '—', label: 'Solar payback period', info: 'Estimated years to recover solar capex from savings and export revenue.' },
+    { value: opt.payback_wind_years != null ? `${opt.payback_wind_years} yr` : '—', label: 'Wind payback period', info: 'Estimated years to recover wind capex from savings and export revenue.' },
   ]
 
   const annualTotalInclCapexFor = (r) => {
@@ -124,24 +128,106 @@ export function ResultView({ result, optimiserControls }) {
     return `${(v / 100).toFixed(3)}`
   }
 
+  const topRanking = result.ranking?.[0]
+  const worstRanking = (result.ranking || []).length > 1 ? result.ranking[result.ranking.length - 1] : null
+  const bestAnnualBill = annualBillFor(topRanking)
+  const worstAnnualBill = annualBillFor(worstRanking)
+  const savingsVsWorst =
+    Number.isFinite(bestAnnualBill) && Number.isFinite(worstAnnualBill) && worstAnnualBill > bestAnnualBill
+      ? worstAnnualBill - bestAnnualBill
+      : null
+  const paybackYears = (() => {
+    const s = Number(opt.payback_solar_years)
+    const w = Number(opt.payback_wind_years)
+    const candidates = [s, w].filter((v) => Number.isFinite(v) && v > 0)
+    if (candidates.length === 0) return null
+    return Math.min(...candidates)
+  })()
+  const bestTariffLabel = `${best?.supplier_name || '—'}${best?.tariff_name ? ` — ${best.tariff_name}` : ''}`
+
   return (
-    <div className="dashboard-layout">
-      <div className="dashboard-left">
+    <>
+      <div className="headline-banner" role="region" aria-label="Headline recommendation">
+        <div className="headline-top">
+          <span className="headline-badge">Your best match</span>
+          <span className="headline-title">{bestTariffLabel}</span>
+          {best?.is_green ? <span className="headline-green" title="Green tariff">Green</span> : null}
+        </div>
+        <div className="headline-stats">
+          <div className="headline-stat">
+            <div className="headline-stat-value">
+              {Number.isFinite(bestAnnualBill) ? `£${Math.round(bestAnnualBill).toLocaleString('en-GB')}` : '—'}
+            </div>
+            <div className="headline-stat-label">Estimated annual bill</div>
+          </div>
+          <div className="headline-stat">
+            <div className="headline-stat-value">
+              £{Math.round(Number(opt.capex) || 0).toLocaleString('en-GB')}
+            </div>
+            <div className="headline-stat-label">Upfront investment</div>
+          </div>
+          <div className="headline-stat">
+            <div className="headline-stat-value">{paybackYears != null ? `${paybackYears} yr` : '—'}</div>
+            <div className="headline-stat-label">Fastest payback</div>
+          </div>
+          {savingsVsWorst != null ? (
+            <div className="headline-stat headline-stat-savings">
+              <div className="headline-stat-value">£{Math.round(savingsVsWorst).toLocaleString('en-GB')}</div>
+              <div className="headline-stat-label">Save vs priciest option (per year)</div>
+            </div>
+          ) : null}
+        </div>
+      </div>
+      <div className="dashboard-layout">
+        <div className="dashboard-left">
         <div className="card dashboard-card dashboard-card-wide">
           <h2>
             System
             <InfoIcon text="Optimal solar/wind sizing and resulting annual totals." />
           </h2>
-          <div className="result-grid system-grid">
-            {tiles.map(({ value, label, info }) => (
-              <div key={label} className="result-tile">
-                <div className="value">{value}</div>
-                <div className="label">
-                  <span className="tile-label">{label}</span>
-                  <InfoIcon text={info} />
-                </div>
+          <div className="system-sections">
+            <div className="result-section">
+              <h3 className="result-section-title">System sizing</h3>
+              <div className="result-grid system-grid">
+                {systemSizingTiles.map(({ value, label, info }) => (
+                  <div key={label} className="result-tile">
+                    <div className="value">{value}</div>
+                    <div className="label">
+                      <span className="tile-label">{label}</span>
+                      <InfoIcon text={info} />
+                    </div>
+                  </div>
+                ))}
               </div>
-            ))}
+            </div>
+            <div className="result-section">
+              <h3 className="result-section-title">Annual energy flow</h3>
+              <div className="result-grid system-grid">
+                {annualEnergyTiles.map(({ value, label, info }) => (
+                  <div key={label} className="result-tile">
+                    <div className="value">{value}</div>
+                    <div className="label">
+                      <span className="tile-label">{label}</span>
+                      <InfoIcon text={info} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="result-section">
+              <h3 className="result-section-title">Investment and payback</h3>
+              <div className="result-grid system-grid">
+                {investmentTiles.map(({ value, label, info }) => (
+                  <div key={label} className="result-tile">
+                    <div className="value">{value}</div>
+                    <div className="label">
+                      <span className="tile-label">{label}</span>
+                      <InfoIcon text={info} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
 
           <details className="ranking-menu" open>
@@ -193,10 +279,13 @@ export function ResultView({ result, optimiserControls }) {
                 <ResponsiveContainer>
                   <LineChart data={chartData} margin={{ top: 6, right: 12, left: 4, bottom: 2 }}>
                     <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="month" />
+                    <XAxis
+                      dataKey="month"
+                      label={{ value: 'Calendar month', position: 'insideBottom', offset: -2, style: { fontSize: 11 } }}
+                    />
                     <YAxis
                       width={44}
-                      label={{ value: 'kWh / month', angle: -90, position: 'insideLeft', offset: 10, style: { textAnchor: 'middle', fontSize: 11 } }}
+                      label={{ value: 'Energy (kWh/month)', angle: -90, position: 'insideLeft', offset: 10, style: { textAnchor: 'middle', fontSize: 11 } }}
                     />
                     <Tooltip content={(props) => <CustomTooltip {...props} />} />
                     <Line type="monotone" dataKey="solar_kwh" name="Solar" stroke="#f59e0b" strokeWidth={2} dot={false} />
@@ -303,5 +392,6 @@ export function ResultView({ result, optimiserControls }) {
         </div>
       </div>
     </div>
+    </>
   )
 }

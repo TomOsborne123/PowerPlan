@@ -86,6 +86,78 @@ export function App() {
   const requestSeqRef = useRef(0)
   const stepAdvanceTimerRef = useRef(null)
   const didFetchExportRef = useRef(false)
+  const didHydrateRef = useRef(false)
+
+  const PERSIST_KEY = 'powerplan:v1'
+
+  useEffect(() => {
+    if (didHydrateRef.current) return
+    didHydrateRef.current = true
+    try {
+      const raw = typeof window !== 'undefined' ? window.localStorage.getItem(PERSIST_KEY) : null
+      if (!raw) return
+      const saved = JSON.parse(raw) || {}
+      if (typeof saved.postcode === 'string') setPostcode(saved.postcode)
+      if (typeof saved.addressName === 'string') setAddressName(saved.addressName)
+      if (typeof saved.annualConsumptionKwh === 'string') setAnnualConsumptionKwh(saved.annualConsumptionKwh)
+      if (typeof saved.homeOrBusiness === 'string') setHomeOrBusiness(saved.homeOrBusiness)
+      if (typeof saved.evInterest === 'string') setEvInterest(saved.evInterest)
+      if (typeof saved.heatingFraction === 'number') setHeatingFraction(saved.heatingFraction)
+      if (typeof saved.insulationRValue === 'number') setInsulationRValue(saved.insulationRValue)
+      if (typeof saved.heatPumpTier === 'string') setHeatPumpTier(saved.heatPumpTier)
+      if (typeof saved.solarTier === 'string') setSolarTier(saved.solarTier)
+      if (typeof saved.windTier === 'string') setWindTier(saved.windTier)
+      if (typeof saved.preferGreen === 'boolean') setPreferGreen(saved.preferGreen)
+      if (typeof saved.optimizeOverYears === 'number') setOptimizeOverYears(saved.optimizeOverYears)
+      if (typeof saved.projectionYears === 'number') setProjectionYears(saved.projectionYears)
+      if (typeof saved.projectionSolarTier === 'string') setProjectionSolarTier(saved.projectionSolarTier)
+      if (typeof saved.projectionWindTier === 'string') setProjectionWindTier(saved.projectionWindTier)
+    } catch {
+      // Ignore malformed localStorage.
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!didHydrateRef.current) return
+    try {
+      const payload = {
+        postcode,
+        addressName,
+        annualConsumptionKwh,
+        homeOrBusiness,
+        evInterest,
+        heatingFraction,
+        insulationRValue,
+        heatPumpTier,
+        solarTier,
+        windTier,
+        preferGreen,
+        optimizeOverYears,
+        projectionYears,
+        projectionSolarTier,
+        projectionWindTier,
+      }
+      window.localStorage.setItem(PERSIST_KEY, JSON.stringify(payload))
+    } catch {
+      // Storage may be unavailable (e.g. private mode); ignore.
+    }
+  }, [
+    postcode,
+    addressName,
+    annualConsumptionKwh,
+    homeOrBusiness,
+    evInterest,
+    heatingFraction,
+    insulationRValue,
+    heatPumpTier,
+    solarTier,
+    windTier,
+    preferGreen,
+    optimizeOverYears,
+    projectionYears,
+    projectionSolarTier,
+    projectionWindTier,
+  ])
 
   useEffect(() => {
     if (uiStep !== 3 || didFetchExportRef.current) return
@@ -148,8 +220,10 @@ export function App() {
   }, [uiStep])
 
   useEffect(() => {
-    if (uiStep !== 2) {
-      setScrapeProgressPct(0)
+    if (!scraping && !tariffScrapePending) {
+      // Snap to 100% briefly when a scrape finishes so the bar reads as done on any visible step.
+      if (scrapeLoaded) setScrapeProgressPct(100)
+      else setScrapeProgressPct(0)
       return
     }
     if (tariffScrapePending) {
@@ -168,7 +242,7 @@ export function App() {
       return () => window.clearInterval(id)
     }
     setScrapeProgressPct(0)
-  }, [uiStep, tariffScrapePending, scraping])
+  }, [tariffScrapePending, scraping, scrapeLoaded])
 
   // No scrolling: keep the UI within a single view.
 
@@ -257,6 +331,16 @@ export function App() {
         setLoading(false)
         return false
       }
+      // Let the user answer optimiser questions while the scrape continues in the background.
+      if (triggeredByEnter) {
+        if (stepAdvanceTimerRef.current) {
+          window.clearTimeout(stepAdvanceTimerRef.current)
+        }
+        stepAdvanceTimerRef.current = window.setTimeout(() => {
+          setUiStep((prev) => (prev <= 2 ? 3 : prev))
+          stepAdvanceTimerRef.current = null
+        }, 400)
+      }
       // Poll until completed/failed. Treat long-lived "idle" as lost in-memory job (e.g. Gunicorn worker restart).
       // How often we ask the server for scrape status (job runtime is unchanged; lower = snappier UI).
       const pollIntervalMs = 3500
@@ -277,7 +361,8 @@ export function App() {
             if (triggeredByEnter) {
               setGlobeSpinning(false)
               setGlobeLanded(false)
-              setUiStep(1)
+              // Only bounce the user back to step 1 if they're still on the loading screen.
+              setUiStep((prev) => (prev > 2 ? prev : 1))
             }
             break
           }
@@ -288,7 +373,8 @@ export function App() {
             if (triggeredByEnter) {
               setGlobeSpinning(false)
               setGlobeLanded(false)
-              setUiStep(1)
+              // Only bounce the user back to step 1 if they're still on the loading screen.
+              setUiStep((prev) => (prev > 2 ? prev : 1))
             }
             break
           }
@@ -310,9 +396,10 @@ export function App() {
               setGlobeSpinning(false)
               setGlobeLanded(true)
               setGlobeFlyTrigger((v) => v + 1)
-              // Let the globe "land/zoom" animation play before advancing.
+              // Only advance if the user is still on the loading step —
+              // otherwise they've already moved on to the optimiser questions.
               stepAdvanceTimerRef.current = window.setTimeout(() => {
-                setUiStep(3)
+                setUiStep((prev) => (prev <= 2 ? 3 : prev))
                 stepAdvanceTimerRef.current = null
               }, 650)
             }
@@ -323,7 +410,8 @@ export function App() {
             if (triggeredByEnter) {
               setGlobeSpinning(false)
               setGlobeLanded(false)
-              setUiStep(1)
+              // Only bounce the user back to step 1 if they're still on the loading screen.
+              setUiStep((prev) => (prev > 2 ? prev : 1))
             }
           }
           break
@@ -333,7 +421,7 @@ export function App() {
           if (triggeredByEnter) {
             setGlobeSpinning(false)
             setGlobeLanded(false)
-            setUiStep(1)
+            setUiStep((prev) => (prev > 2 ? prev : 1))
           }
           break
         }
@@ -345,7 +433,7 @@ export function App() {
       if (triggeredByEnter) {
         setGlobeSpinning(false)
         setGlobeLanded(false)
-        setUiStep(1)
+        setUiStep((prev) => (prev > 2 ? prev : 1))
       }
       return false
     } finally {
@@ -359,8 +447,8 @@ export function App() {
 
   const stepAvailable = (step) => {
     if (step === 1) return true
-    if (step === 2) return scraping || uiStep === 2
-    if (step === 3) return scrapeLoaded
+    if (step === 2) return scraping || tariffScrapePending || uiStep === 2
+    if (step === 3) return scrapeLoaded || scraping || tariffScrapePending
     if (step === 4) return Boolean(result)
     if (step === 5) return Boolean(result)
     return false
@@ -610,24 +698,32 @@ export function App() {
           >
             Cost projection
           </button>
-          <div className="step-dots" aria-label="Page navigation (steps)">
-            {[1, 2, 3, 4, 5].map((s) => {
+          <nav className="step-pills" aria-label="Page navigation (steps)">
+            {[
+              { s: 1, label: 'Postcode' },
+              { s: 2, label: 'Loading' },
+              { s: 3, label: 'Preferences' },
+              { s: 4, label: 'Results' },
+              { s: 5, label: 'Projection' },
+            ].map(({ s, label }) => {
               const enabled = stepAvailable(s)
               const active = uiStep === s
               return (
                 <button
                   key={s}
                   type="button"
-                  className={`step-dot ${active ? 'active' : ''} ${enabled ? '' : 'disabled'}`}
+                  className={`step-pill ${active ? 'active' : ''} ${enabled ? '' : 'disabled'}`}
                   onClick={() => goToStep(s)}
                   disabled={!canNavigate || !enabled}
                   aria-current={active ? 'page' : undefined}
-                  aria-label={`Go to step ${s}`}
-                  title={`Step ${s}`}
-                />
+                  title={`${s}. ${label}`}
+                >
+                  <span className="step-pill-num">{s}</span>
+                  <span className="step-pill-label">{label}</span>
+                </button>
               )
             })}
-          </div>
+          </nav>
         </div>
       </div>
       <p className="app-overview-text">{appOverviewText}</p>
@@ -843,10 +939,36 @@ export function App() {
         </form>
       )}
 
-      {uiStep === 3 && scrapeLoaded && (
+      {uiStep === 3 && (scrapeLoaded || scraping || tariffScrapePending) && (
         <form onSubmit={handleSubmit} className="card">
           <h2>Optimiser questions</h2>
           <p className="field-hint">Question {optimiserQuestionIdx + 1} of 7</p>
+
+          {(scraping || tariffScrapePending) && (
+            <div className="scrape-inline-status" role="status" aria-live="polite">
+              <div className="scrape-inline-status-row">
+                <span className="scrape-inline-spinner" aria-hidden="true" />
+                <span className="scrape-inline-text">
+                  Searching local tariffs in the background — keep answering and we&apos;ll be ready when you are.
+                </span>
+              </div>
+              <div
+                className="scrape-progress"
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={Math.round(scrapeProgressPct)}
+                aria-label="Approximate tariff scrape progress"
+              >
+                <div className="scrape-progress-bar" style={{ width: `${scrapeProgressPct}%` }} />
+              </div>
+            </div>
+          )}
+          {!scraping && !tariffScrapePending && scrapeLoaded && (
+            <div className="scrape-inline-ready" role="status" aria-live="polite">
+              Tariff search complete — {scrapeTariffCount ?? 0} tariffs ready.
+            </div>
+          )}
 
           {optimiserQuestionIdx === 0 && (
             <div>
@@ -968,8 +1090,17 @@ export function App() {
                 Next
               </button>
             ) : (
-              <button type="submit" className="btn" disabled={loading}>
-                {loading ? 'Calculating…' : 'Get recommendation'}
+              <button
+                type="submit"
+                className="btn"
+                disabled={loading || scraping || tariffScrapePending || !scrapeLoaded}
+                title={!scrapeLoaded && (scraping || tariffScrapePending) ? 'Waiting for tariff search to finish' : undefined}
+              >
+                {loading
+                  ? 'Calculating…'
+                  : scraping || tariffScrapePending || !scrapeLoaded
+                  ? 'Waiting for tariffs…'
+                  : 'Get recommendation'}
               </button>
             )}
           </div>
@@ -1007,8 +1138,8 @@ export function App() {
                   </div>
                   <div>
                     <label htmlFor="export_price_pct">
-                      Export sensitivity {exportPricePct}%
-                      <InfoIcon text="Range slider: stress-test export £/kWh." />
+                      Export price adjustment ({exportPricePct}%)
+                      <InfoIcon text="Adjusts the export price assumption up or down to test sensitivity." />
                     </label>
                     <input
                       type="range"
@@ -1025,8 +1156,8 @@ export function App() {
                 <div className="form-row col2" style={{ marginTop: '0.35rem' }}>
                   <div>
                     <label htmlFor="solar_capacity_pct_results">
-                      Solar slider {solarCapacityPct}%
-                      <InfoIcon text="Range slider: solar search bounds around 20 kW." />
+                      Solar size search adjustment ({solarCapacityPct}%)
+                      <InfoIcon text="Widens or narrows the solar capacity search range around the default limit." />
                     </label>
                     <input
                       type="range"
@@ -1041,8 +1172,8 @@ export function App() {
                   </div>
                   <div>
                     <label htmlFor="wind_capacity_pct_results">
-                      Wind slider {windCapacityPct}%
-                      <InfoIcon text="Range slider: wind search bounds around 10 kW." />
+                      Wind size search adjustment ({windCapacityPct}%)
+                      <InfoIcon text="Widens or narrows the wind capacity search range around the default limit." />
                     </label>
                     <input
                       type="range"
@@ -1060,8 +1191,8 @@ export function App() {
                 <div className="form-row col2" style={{ marginTop: '0.35rem' }}>
                   <div>
                     <label htmlFor="demand_pct">
-                      Demand slider {demandPct}%
-                      <InfoIcon text="Range slider: scales baseline annual electricity use." />
+                      Home electricity usage adjustment ({demandPct}%)
+                      <InfoIcon text="Scales your baseline annual electricity use up or down." />
                     </label>
                     <input
                       type="range"

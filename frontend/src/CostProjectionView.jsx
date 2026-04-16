@@ -73,7 +73,7 @@ export function CostProjectionView({
 
       <div className="form-row col2">
         <div>
-          <label htmlFor="projection_years">Projection horizon: {maxYears} years</label>
+          <label htmlFor="projection_years">Projection time horizon ({maxYears} years)</label>
           <input
             id="projection_years"
             type="range"
