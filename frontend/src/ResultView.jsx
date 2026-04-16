@@ -166,6 +166,28 @@ export function ResultView({ result, optimiserControls }) {
                 Optimiser demand <InfoIcon text="Modelled grid-side electricity demand in that month after COP (used with generation to size solar/wind). Months sum to the optimiser’s annual demand." />
               </span>
             </div>
+            <div className="chart-legend" aria-label="Graph legend">
+              <span className="chart-legend-item">
+                <span className="chart-legend-line solar" aria-hidden="true" />
+                Solar
+              </span>
+              <span className="chart-legend-item">
+                <span className="chart-legend-line wind" aria-hidden="true" />
+                Wind
+              </span>
+              <span className="chart-legend-item">
+                <span className="chart-legend-line usage" aria-hidden="true" />
+                Usage
+              </span>
+              <span className="chart-legend-item">
+                <span className="chart-legend-line thermal" aria-hidden="true" />
+                Usage after insulation
+              </span>
+              <span className="chart-legend-item">
+                <span className="chart-legend-line demand" aria-hidden="true" />
+                Optimiser demand
+              </span>
+            </div>
             {chartData.length > 0 ? (
               <div style={{ width: '100%', height: 170 }}>
                 <ResponsiveContainer>
