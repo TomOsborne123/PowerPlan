@@ -75,10 +75,11 @@ export function App() {
   const [projectionYears, setProjectionYears] = useState(20)
   const [projectionLoading, setProjectionLoading] = useState(false)
   const [projectionScenarios, setProjectionScenarios] = useState([
-    'inc_baseline',
-    'inc_solar',
-    'inc_solar_wind',
-    'inc_full',
+    'combo_baseline',
+    'combo_solar',
+    'combo_wind',
+    'combo_insulation',
+    'combo_solar_wind_insulation',
   ])
   const [optimiserQuestionIdx, setOptimiserQuestionIdx] = useState(0)
   const [projectionSolarTier, setProjectionSolarTier] = useState('mid')
@@ -1158,6 +1159,25 @@ export function App() {
 
                 <div className="form-row col2" style={{ marginTop: '0.35rem' }}>
                   <div>
+                    <label htmlFor="demand_pct">
+                      Home electricity usage adjustment ({demandPct}%)
+                      <InfoIcon text="Scales your baseline annual electricity use up or down." />
+                    </label>
+                    <input
+                      type="range"
+                      id="demand_pct"
+                      min={-300}
+                      max={300}
+                      step={50}
+                      value={demandPct}
+                      onChange={(e) => setDemandPct(Number(e.target.value))}
+                    />
+                  </div>
+                  <div />
+                </div>
+
+                <div className="form-row col2" style={{ marginTop: '0.35rem' }}>
+                  <div>
                     <label htmlFor="solar_max_kw_results">
                       Solar maximum capacity (kW)
                       <InfoIcon text="Upper bound on installed solar kWp the optimiser may choose. Default is 20 kW." />
@@ -1187,25 +1207,6 @@ export function App() {
                       onChange={(e) => setWindMaxKwInput(e.target.value === '' ? '' : Number(e.target.value))}
                     />
                   </div>
-                </div>
-
-                <div className="form-row col2" style={{ marginTop: '0.35rem' }}>
-                  <div>
-                    <label htmlFor="demand_pct">
-                      Home electricity usage adjustment ({demandPct}%)
-                      <InfoIcon text="Scales your baseline annual electricity use up or down." />
-                    </label>
-                    <input
-                      type="range"
-                      id="demand_pct"
-                      min={-300}
-                      max={300}
-                      step={50}
-                      value={demandPct}
-                      onChange={(e) => setDemandPct(Number(e.target.value))}
-                    />
-                  </div>
-                  <div />
                 </div>
               </>
             }

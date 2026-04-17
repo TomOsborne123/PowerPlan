@@ -622,37 +622,36 @@ def api_cost_projection():
     grid_gbp_per_kwh = unit_rate_p / 100.0
     standing_gbp_per_year = 365.0 * (standing_p_day / 100.0)
 
-    # Incremental build: each step includes everything from the previous step.
-    scenario_defs = [
-        {
-            "id": "inc_baseline",
-            "label": f"1. Baseline — grid only (~R {baseline_insulation:g} insulation)",
-            "insulation_r_value": baseline_insulation,
-            "solar_kw": 0.0,
-            "wind_kw": 0.0,
-        },
-        {
-            "id": "inc_solar",
-            "label": f"2. + Solar (~{scenario_solar_kw:g} kWp), same insulation",
-            "insulation_r_value": baseline_insulation,
-            "solar_kw": scenario_solar_kw,
-            "wind_kw": 0.0,
-        },
-        {
-            "id": "inc_solar_wind",
-            "label": f"3. + Wind (~{scenario_wind_kw:g} kW) — solar + wind, same insulation",
-            "insulation_r_value": baseline_insulation,
-            "solar_kw": scenario_solar_kw,
-            "wind_kw": scenario_wind_kw,
-        },
-        {
-            "id": "inc_full",
-            "label": f"4. + Stronger insulation (~R {upgraded_insulation:g}) — all upgrades",
-            "insulation_r_value": upgraded_insulation,
-            "solar_kw": scenario_solar_kw,
-            "wind_kw": scenario_wind_kw,
-        },
+    # All 2^3 = 8 combinations of the three upgrade technologies: Solar, Wind, Insulation.
+    # Each scenario's `techs` list is a stable, sorted set of tech keys so the frontend can render
+    # consistent badges and group by "individual / pairs / full" without hard-coding each id.
+    def _combo_label(techs: list[str]) -> str:
+        if not techs:
+            return f"Baseline — grid only (R {baseline_insulation:g})"
+        pretty = {"solar": "Solar", "wind": "Wind", "insulation": "Insulation"}
+        return " + ".join(pretty[t] for t in techs)
+
+    combos = [
+        [],
+        ["solar"],
+        ["wind"],
+        ["insulation"],
+        ["solar", "wind"],
+        ["solar", "insulation"],
+        ["wind", "insulation"],
+        ["solar", "wind", "insulation"],
     ]
+    scenario_defs = []
+    for techs in combos:
+        sid = "combo_baseline" if not techs else "combo_" + "_".join(techs)
+        scenario_defs.append({
+            "id": sid,
+            "label": _combo_label(techs),
+            "techs": list(techs),
+            "insulation_r_value": upgraded_insulation if "insulation" in techs else baseline_insulation,
+            "solar_kw": scenario_solar_kw if "solar" in techs else 0.0,
+            "wind_kw": scenario_wind_kw if "wind" in techs else 0.0,
+        })
     if isinstance(scenario_ids, list) and scenario_ids:
         want = {str(x) for x in scenario_ids}
         scenario_defs = [s for s in scenario_defs if s["id"] in want]
@@ -681,6 +680,10 @@ def api_cost_projection():
             series_out.append({
                 "id": sc["id"],
                 "label": sc["label"],
+                "techs": sc.get("techs", []),
+                "solar_kw": sc["solar_kw"],
+                "wind_kw": sc["wind_kw"],
+                "insulation_r_value": sc["insulation_r_value"],
                 "cumulative_gbp": cumulative,
                 "annual_running_gbp": round(annual_running_gbp, 2),
                 "capex_gbp": round(capex, 2),
