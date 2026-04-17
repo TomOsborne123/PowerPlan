@@ -2,58 +2,50 @@ import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tool
 import { InfoIcon } from './InfoIcon'
 import { SOLAR_TIER_INFO, WIND_TIER_INFO } from './optimiserConstants'
 
-const PALETTE = ['#94a3b8', '#f59e0b', '#60a5fa', '#34d399', '#f97316', '#a78bfa', '#22d3ee', '#f87171']
-
 const PROJECTION_TIERS = ['budget', 'mid', 'premium']
 
-// Known technology keys emitted by the backend for each scenario.
+// Canonical order used to build the combo scenario id sent by the backend:
+//   combo_baseline, combo_solar, combo_solar_wind, combo_solar_wind_insulation, …
+const TECH_ORDER = ['solar', 'wind', 'insulation']
+
 const TECHS = [
-  { key: 'solar', label: 'Solar', bg: '#fde68a', fg: '#92400e' },
-  { key: 'wind', label: 'Wind', bg: '#bae6fd', fg: '#075985' },
-  { key: 'insulation', label: 'Insulation', bg: '#bbf7d0', fg: '#14532d' },
+  { key: 'solar', label: 'Solar', hint: 'Rooftop PV', bg: '#fde68a', fg: '#92400e', line: '#f59e0b' },
+  { key: 'wind', label: 'Wind', hint: 'Small wind turbine', bg: '#bae6fd', fg: '#075985', line: '#0ea5e9' },
+  { key: 'insulation', label: 'Insulation', hint: 'Stronger fabric', bg: '#bbf7d0', fg: '#14532d', line: '#22c55e' },
 ]
 
-function techsForSeries(s) {
-  if (Array.isArray(s?.techs)) return s.techs
-  // Back-compat: derive from id prefix `combo_<a>_<b>_<c>` if the backend didn't send `techs`.
-  const id = String(s?.id || '')
-  if (id === 'combo_baseline') return []
-  if (id.startsWith('combo_')) return id.replace('combo_', '').split('_').filter(Boolean)
-  return []
+const BASELINE_COLOUR = '#94a3b8'
+const OVERLAY_COLOUR = '#2563eb'
+
+function comboIdFor(techs) {
+  const ordered = TECH_ORDER.filter((t) => techs.includes(t))
+  if (ordered.length === 0) return 'combo_baseline'
+  return 'combo_' + ordered.join('_')
 }
 
-function TechBadges({ techs }) {
-  if (!techs || techs.length === 0) {
-    return <span className="tech-badge tech-badge-baseline">Grid only</span>
+function fmtGbp(n) {
+  const v = Math.round(Number(n) || 0)
+  const sign = v < 0 ? '-£' : '£'
+  return sign + Math.abs(v).toLocaleString('en-GB')
+}
+
+function breakEvenYear(baseline, overlay) {
+  if (!baseline || !overlay) return null
+  const baseArr = baseline.cumulative_gbp || []
+  const overArr = overlay.cumulative_gbp || []
+  const n = Math.min(baseArr.length, overArr.length)
+  for (let i = 0; i < n; i++) {
+    if (Number(overArr[i]) <= Number(baseArr[i])) return i + 1
   }
-  return (
-    <span className="tech-badge-row">
-      {TECHS.filter((t) => techs.includes(t.key)).map((t) => (
-        <span
-          key={t.key}
-          className="tech-badge"
-          style={{ background: t.bg, color: t.fg }}
-        >
-          {t.label}
-        </span>
-      ))}
-    </span>
-  )
-}
-
-function groupLabel(count) {
-  if (count === 0) return 'Baseline'
-  if (count === 1) return 'Individual technologies'
-  if (count === 2) return 'Pairs of technologies'
-  return 'All technologies combined'
+  return null
 }
 
 export function CostProjectionView({
   projection,
   maxYears,
   onYearsChange,
-  selectedScenarioIds,
-  onToggleScenario,
+  selectedTechs,
+  onToggleTech,
   projectionSolarTier,
   projectionWindTier,
   onProjectionSolarTier,
@@ -62,44 +54,33 @@ export function CostProjectionView({
 }) {
   const years = Array.isArray(projection?.years) ? projection.years : []
   const series = Array.isArray(projection?.series) ? projection.series : []
-  const shown = series.filter((s) => selectedScenarioIds.includes(s.id))
+  const seriesById = Object.fromEntries(series.map((s) => [s.id, s]))
+
+  const baseline = seriesById.combo_baseline || null
+  const overlayId = comboIdFor(selectedTechs)
+  const hasOverlay = overlayId !== 'combo_baseline'
+  const overlay = hasOverlay ? seriesById[overlayId] : null
+
   const rows = years.map((y, idx) => {
     const row = { year: y }
-    shown.forEach((s) => { row[s.id] = Number(s.cumulative_gbp?.[idx] ?? 0) })
+    if (baseline) row.baseline = Number(baseline.cumulative_gbp?.[idx] ?? 0)
+    if (overlay) row.overlay = Number(overlay.cumulative_gbp?.[idx] ?? 0)
     return row
   })
 
-  // Group scenarios by number of technologies for a clearer checklist (baseline → individual → pairs → all).
-  const grouped = series.reduce((acc, s) => {
-    const count = techsForSeries(s).length
-    if (!acc[count]) acc[count] = []
-    acc[count].push(s)
-    return acc
-  }, {})
-  const groupKeys = Object.keys(grouped).map(Number).sort((a, b) => a - b)
+  const finalBaseline = baseline?.cumulative_gbp?.[baseline.cumulative_gbp.length - 1]
+  const finalOverlay = overlay?.cumulative_gbp?.[overlay.cumulative_gbp.length - 1]
+  const totalDelta = overlay && baseline ? Number(finalOverlay) - Number(finalBaseline) : null
+  const savesMoney = totalDelta != null && totalDelta < 0
+  const breakEven = hasOverlay ? breakEvenYear(baseline, overlay) : null
 
-  // Preserve series colours across chart + legend by indexing into the full series list.
-  const colourForId = (id) => {
-    const idx = series.findIndex((s) => s.id === id)
-    return PALETTE[(idx < 0 ? 0 : idx) % PALETTE.length]
-  }
-
-  const selectAll = () => {
-    series.forEach((s) => {
-      if (!selectedScenarioIds.includes(s.id)) onToggleScenario(s.id)
-    })
-  }
-  const clearAll = () => {
-    series.forEach((s) => {
-      if (selectedScenarioIds.includes(s.id)) onToggleScenario(s.id)
-    })
-  }
+  const overlayLabel = overlay?.label || (hasOverlay ? 'Your upgrade plan' : 'Baseline')
 
   return (
     <div className="card">
       <h2>
         Cost projection
-        <InfoIcon text="Compare cumulative £ cost over time across every combination of Solar, Wind and Insulation. Year 0 starts at each scenario's capex; each year adds net running cost using the best tariff's unit rate, standing charge, and your chosen export price." />
+        <InfoIcon text="Start with the baseline (grid only). Toggle upgrades below to overlay a single 'your plan' line showing cumulative £ over time with that combination of technologies." />
       </h2>
 
       <div className="form-row col2">
@@ -157,59 +138,97 @@ export function CostProjectionView({
 
       <div className="form-row">
         <div>
-          <div className="scenario-select-header">
-            <label style={{ margin: 0 }}>
-              Scenarios to show
-              <InfoIcon text="Tick any combination of upgrades to plot. Each scenario keeps your chosen heat pump setting and tariff; only Solar / Wind / Insulation change across lines." />
-            </label>
-            <div className="scenario-select-actions">
-              <button type="button" className="btn btn-sm" onClick={selectAll} disabled={!series.length}>Select all</button>
-              <button type="button" className="btn btn-sm" onClick={clearAll} disabled={!series.length}>Clear</button>
-            </div>
+          <label className="block-label" style={{ marginBottom: '0.5rem' }}>
+            Upgrades to overlay on the baseline
+            <InfoIcon text="Tap a technology to add it to your plan. The chart always shows the baseline (grid only) in grey and overlays a single blue line for the combination you pick." />
+          </label>
+
+          <div className="tech-toggle-row">
+            {TECHS.map((t) => {
+              const active = selectedTechs.includes(t.key)
+              const scenario = seriesById['combo_' + t.key]
+              const delta = scenario && baseline
+                ? Number(scenario.cumulative_gbp?.[scenario.cumulative_gbp.length - 1] ?? 0)
+                  - Number(baseline.cumulative_gbp?.[baseline.cumulative_gbp.length - 1] ?? 0)
+                : null
+              return (
+                <button
+                  type="button"
+                  key={t.key}
+                  className={`tech-toggle ${active ? 'active' : ''}`}
+                  onClick={() => onToggleTech(t.key)}
+                  style={active
+                    ? { borderColor: t.line, background: t.bg, color: t.fg }
+                    : undefined}
+                  aria-pressed={active}
+                >
+                  <span className="tech-toggle-title">{t.label}</span>
+                  <span className="tech-toggle-hint">{t.hint}</span>
+                  {delta != null ? (
+                    <span className={`tech-toggle-delta ${delta < 0 ? 'saves' : 'costs'}`}>
+                      {delta < 0 ? 'Saves ' : 'Costs '}
+                      {fmtGbp(Math.abs(delta))} over {maxYears}y on its own
+                    </span>
+                  ) : null}
+                </button>
+              )
+            })}
           </div>
 
-          {groupKeys.length === 0 ? (
-            <p className="hint">Scenarios will appear here once the projection loads.</p>
-          ) : (
-            <div className="scenario-groups">
-              {groupKeys.map((count) => (
-                <div key={count} className="scenario-group">
-                  <p className="scenario-group-title">{groupLabel(count)}</p>
-                  <div className="scenario-grid">
-                    {grouped[count].map((s) => {
-                      const techs = techsForSeries(s)
-                      const checked = selectedScenarioIds.includes(s.id)
-                      const colour = colourForId(s.id)
-                      return (
-                        <label key={s.id} className={`scenario-card ${checked ? 'checked' : ''}`}>
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={() => onToggleScenario(s.id)}
-                          />
-                          <span className="scenario-swatch" style={{ background: checked ? colour : 'transparent', borderColor: colour }} />
-                          <span className="scenario-card-body">
-                            <span className="scenario-card-title">{s.label}</span>
-                            <TechBadges techs={techs} />
-                            <span className="scenario-card-stats">
-                              <span>Capex £{Math.round(s.capex_gbp || 0).toLocaleString('en-GB')}</span>
-                              <span>/yr £{Math.round(s.annual_running_gbp || 0).toLocaleString('en-GB')}</span>
-                            </span>
-                          </span>
-                        </label>
-                      )
-                    })}
-                  </div>
-                </div>
-              ))}
-            </div>
+          {hasOverlay && (
+            <button
+              type="button"
+              className="btn btn-sm tech-toggle-reset"
+              onClick={() => selectedTechs.forEach((t) => onToggleTech(t))}
+            >
+              Reset to baseline
+            </button>
           )}
         </div>
       </div>
 
+      {(baseline || overlay) && (
+        <div className="projection-summary">
+          <div className="projection-summary-col">
+            <span className="projection-summary-label">Baseline (grid only)</span>
+            <span className="projection-summary-value">
+              {fmtGbp(finalBaseline)} <small>over {maxYears}y</small>
+            </span>
+            <span className="projection-summary-sub">
+              Capex {fmtGbp(baseline?.capex_gbp)} · Running {fmtGbp(baseline?.annual_running_gbp)}/yr
+            </span>
+          </div>
+          <div className="projection-summary-arrow" aria-hidden="true">→</div>
+          <div className="projection-summary-col">
+            <span className="projection-summary-label">
+              {hasOverlay ? 'Your plan' : 'No upgrades selected'}
+            </span>
+            <span className="projection-summary-value" style={{ color: hasOverlay ? OVERLAY_COLOUR : undefined }}>
+              {overlay ? fmtGbp(finalOverlay) : '—'} {overlay ? <small>over {maxYears}y</small> : null}
+            </span>
+            <span className="projection-summary-sub">
+              {overlay
+                ? <>Capex {fmtGbp(overlay.capex_gbp)} · Running {fmtGbp(overlay.annual_running_gbp)}/yr</>
+                : 'Tap a technology above to overlay a plan.'}
+            </span>
+          </div>
+          {overlay && (
+            <div className={`projection-summary-delta ${savesMoney ? 'saves' : 'costs'}`}>
+              <span className="projection-summary-delta-value">
+                {savesMoney ? 'Saves ' : 'Costs '}
+                {fmtGbp(Math.abs(totalDelta || 0))}
+              </span>
+              <span className="projection-summary-delta-sub">
+                total over {maxYears}y{breakEven ? ` · break-even year ${breakEven}` : savesMoney ? '' : ' (no break-even in window)'}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+
       {loading ? (
         <p className="hint">Updating projection…</p>
-      ) : rows.length > 0 && shown.length > 0 ? (
+      ) : rows.length > 0 && baseline ? (
         <>
           <p className="field-hint">
             Tariff basis: {projection?.tariff_label || 'selected tariff'} · Unit £{((projection?.unit_rate_p_per_kwh || 0) / 100).toFixed(3)}/kWh · Standing £{((projection?.standing_charge_p_per_day || 0) / 100).toFixed(3)}/day
@@ -222,27 +241,31 @@ export function CostProjectionView({
                 <YAxis tickFormatter={(v) => `£${Math.round(v)}`} />
                 <Tooltip formatter={(v) => `£${Number(v).toFixed(2)}`} />
                 <Legend />
-                {shown.map((s) => (
+                <Line
+                  type="monotone"
+                  dataKey="baseline"
+                  name={baseline.label}
+                  stroke={BASELINE_COLOUR}
+                  strokeDasharray="4 4"
+                  strokeWidth={2}
+                  dot={false}
+                />
+                {overlay && (
                   <Line
-                    key={s.id}
                     type="monotone"
-                    dataKey={s.id}
-                    name={s.label}
-                    stroke={colourForId(s.id)}
-                    strokeWidth={2}
+                    dataKey="overlay"
+                    name={overlayLabel}
+                    stroke={OVERLAY_COLOUR}
+                    strokeWidth={3}
                     dot={false}
                   />
-                ))}
+                )}
               </LineChart>
             </ResponsiveContainer>
           </div>
         </>
       ) : (
-        <p className="hint">
-          {shown.length === 0 && series.length > 0
-            ? 'Tick at least one scenario above to see the projection.'
-            : 'No projection data yet.'}
-        </p>
+        <p className="hint">No projection data yet.</p>
       )}
     </div>
   )

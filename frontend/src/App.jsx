@@ -74,13 +74,8 @@ export function App() {
   const [projection, setProjection] = useState(null)
   const [projectionYears, setProjectionYears] = useState(20)
   const [projectionLoading, setProjectionLoading] = useState(false)
-  const [projectionScenarios, setProjectionScenarios] = useState([
-    'combo_baseline',
-    'combo_solar',
-    'combo_wind',
-    'combo_insulation',
-    'combo_solar_wind_insulation',
-  ])
+  // Which upgrade technologies to overlay on the baseline projection. Empty = just the baseline.
+  const [projectionTechs, setProjectionTechs] = useState([])
   const [optimiserQuestionIdx, setOptimiserQuestionIdx] = useState(0)
   const [projectionSolarTier, setProjectionSolarTier] = useState('mid')
   const [projectionWindTier, setProjectionWindTier] = useState('mid')
@@ -1219,15 +1214,15 @@ export function App() {
           projection={projection}
           maxYears={projectionYears}
           loading={projectionLoading || loading}
-          selectedScenarioIds={projectionScenarios}
+          selectedTechs={projectionTechs}
           projectionSolarTier={projectionSolarTier}
           projectionWindTier={projectionWindTier}
           onProjectionSolarTier={setProjectionSolarTier}
           onProjectionWindTier={setProjectionWindTier}
           onYearsChange={(v) => setProjectionYears(v)}
-          onToggleScenario={(id) => {
-            setProjectionScenarios((prev) => (
-              prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+          onToggleTech={(tech) => {
+            setProjectionTechs((prev) => (
+              prev.includes(tech) ? prev.filter((x) => x !== tech) : [...prev, tech]
             ))
           }}
         />
