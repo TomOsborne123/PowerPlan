@@ -56,8 +56,9 @@ export function App() {
   const [homeOrBusiness, setHomeOrBusiness] = useState('home')
   /** Scrapes tariffs with the right EV tariff filter: yes | interested | no */
   const [evInterest, setEvInterest] = useState('interested')
-  const [solarCapacityPct, setSolarCapacityPct] = useState(0)
-  const [windCapacityPct, setWindCapacityPct] = useState(0)
+  // Direct kW caps for solar and wind. Defaults match the previous baseline limits (20 / 10 kW).
+  const [solarMaxKwInput, setSolarMaxKwInput] = useState(20)
+  const [windMaxKwInput, setWindMaxKwInput] = useState(10)
   const [demandPct, setDemandPct] = useState(0)
   const [exportPricePct, setExportPricePct] = useState(0)
   const [globeSpinning, setGlobeSpinning] = useState(false)
@@ -510,12 +511,14 @@ export function App() {
       }
       const solarOff = solarTier === 'none'
       const windOff = windTier === 'none'
-      const solarMaxKw = solarOff ? 0 : Math.max(0, 20 * (1 + solarCapacityPct / 100))
-      const windMaxKw = windOff ? 0 : Math.max(0, 10 * (1 + windCapacityPct / 100))
-      // Also scale the *minimum* capacities so the sliders reliably affect the optimiser result.
-      // Without this, changing only the max bounds often doesn't move the optimal solution.
-      const solarMinKwBase = 1.5 * (1 + solarCapacityPct / 100)
-      const windMinKwBase = 0.5 * (1 + windCapacityPct / 100)
+      const solarMaxKwTyped = Number(solarMaxKwInput)
+      const windMaxKwTyped = Number(windMaxKwInput)
+      const solarMaxKw = solarOff ? 0 : Math.max(0, Number.isFinite(solarMaxKwTyped) ? solarMaxKwTyped : 0)
+      const windMaxKw = windOff ? 0 : Math.max(0, Number.isFinite(windMaxKwTyped) ? windMaxKwTyped : 0)
+      // Scale the minimum capacities proportionally to the user's chosen max so the optimiser
+      // is nudged into a range near the typed value (otherwise it often sticks at the default).
+      const solarMinKwBase = 1.5 * (solarMaxKw / 20)
+      const windMinKwBase = 0.5 * (windMaxKw / 10)
       const solarMinKw = solarOff ? 0 : Math.max(0, Math.min(solarMaxKw, solarMinKwBase))
       const windMinKw = windOff ? 0 : Math.max(0, Math.min(windMaxKw, windMinKwBase))
       const exportPrice = Math.max(0, exportPricePerKwh * (1 + exportPricePct / 100))
@@ -625,8 +628,8 @@ export function App() {
       if (debounceRef.current) window.clearTimeout(debounceRef.current)
     }
   }, [
-    solarCapacityPct,
-    windCapacityPct,
+    solarMaxKwInput,
+    windMaxKwInput,
     demandPct,
     exportPricePct,
     heatingFraction,
@@ -1155,35 +1158,33 @@ export function App() {
 
                 <div className="form-row col2" style={{ marginTop: '0.35rem' }}>
                   <div>
-                    <label htmlFor="solar_capacity_pct_results">
-                      Solar size search adjustment ({solarCapacityPct}%)
-                      <InfoIcon text="Widens or narrows the solar capacity search range around the default limit." />
+                    <label htmlFor="solar_max_kw_results">
+                      Solar maximum capacity (kW)
+                      <InfoIcon text="Upper bound on installed solar kWp the optimiser may choose. Default is 20 kW." />
                     </label>
                     <input
-                      type="range"
-                      id="solar_capacity_pct_results"
-                      min={-300}
-                      max={300}
-                      step={50}
-                      value={solarCapacityPct}
+                      type="number"
+                      id="solar_max_kw_results"
+                      min={0}
+                      step={0.5}
+                      value={solarMaxKwInput}
                       disabled={solarTier === 'none'}
-                      onChange={(e) => setSolarCapacityPct(Number(e.target.value))}
+                      onChange={(e) => setSolarMaxKwInput(e.target.value === '' ? '' : Number(e.target.value))}
                     />
                   </div>
                   <div>
-                    <label htmlFor="wind_capacity_pct_results">
-                      Wind size search adjustment ({windCapacityPct}%)
-                      <InfoIcon text="Widens or narrows the wind capacity search range around the default limit." />
+                    <label htmlFor="wind_max_kw_results">
+                      Wind maximum capacity (kW)
+                      <InfoIcon text="Upper bound on installed wind kW the optimiser may choose. Default is 10 kW." />
                     </label>
                     <input
-                      type="range"
-                      id="wind_capacity_pct_results"
-                      min={-300}
-                      max={300}
-                      step={50}
-                      value={windCapacityPct}
+                      type="number"
+                      id="wind_max_kw_results"
+                      min={0}
+                      step={0.5}
+                      value={windMaxKwInput}
                       disabled={windTier === 'none'}
-                      onChange={(e) => setWindCapacityPct(Number(e.target.value))}
+                      onChange={(e) => setWindMaxKwInput(e.target.value === '' ? '' : Number(e.target.value))}
                     />
                   </div>
                 </div>
