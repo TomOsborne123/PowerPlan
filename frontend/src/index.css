@@ -189,6 +189,132 @@ body {
   padding: 0.75rem 0.85rem;
 }
 
+/* Welcome / title page */
+.welcome-wrap {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 1.25rem;
+  max-width: none;
+}
+
+.welcome {
+  max-width: 880px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 2.25rem 2rem 2.5rem;
+  background: linear-gradient(145deg, rgba(63, 185, 80, 0.08), rgba(77, 163, 255, 0.06) 55%, rgba(124, 92, 255, 0.05));
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 18px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+  text-align: center;
+  animation: welcome-fade-in 420ms ease-out both;
+}
+
+@keyframes welcome-fade-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.welcome-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.65rem;
+  margin-bottom: 1.25rem;
+}
+
+.welcome-logo {
+  width: 96px;
+  height: 96px;
+  border-radius: 20px;
+  background: #0b1220;
+  padding: 10px;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+
+.welcome-title {
+  font-size: 2.4rem;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  margin: 0.35rem 0 0;
+  background: linear-gradient(120deg, #f5d547 0%, #3fb950 55%, #4da3ff 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.welcome-tagline {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 1rem;
+  letter-spacing: 0.02em;
+}
+
+.welcome-description {
+  max-width: 640px;
+  margin: 0 auto 1.5rem;
+  color: #dbe4f2;
+  font-size: 1.02rem;
+  line-height: 1.55;
+}
+
+.welcome-features {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.8rem;
+  margin: 0 0 1.75rem;
+  text-align: left;
+}
+
+.welcome-feature {
+  padding: 0.9rem 1rem;
+  background: rgba(13, 17, 22, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+}
+
+.welcome-feature-title {
+  font-weight: 700;
+  margin-bottom: 0.3rem;
+  color: var(--text);
+  font-size: 0.95rem;
+}
+
+.welcome-feature p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+.welcome-cta {
+  padding: 0.7rem 1.8rem;
+  font-size: 1rem;
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(63, 185, 80, 0.35);
+}
+
+.welcome-footnote {
+  margin: 1rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
+}
+
+@media (max-width: 680px) {
+  .welcome {
+    padding: 1.75rem 1.1rem 2rem;
+  }
+  .welcome-title {
+    font-size: 1.9rem;
+  }
+  .welcome-features {
+    grid-template-columns: 1fr;
+  }
+}
+
 h1 {
   font-size: 1.75rem;
   font-weight: 700;

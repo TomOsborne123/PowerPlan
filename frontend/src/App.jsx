@@ -33,8 +33,9 @@ export function App() {
   const [postcodeDistrict, setPostcodeDistrict] = useState('')
   const [addressName, setAddressName] = useState('')
   // Controls the single-screen "step" experience:
-  // 1) Postcode input, 2) Scraping globe, 3) Optimiser inputs, 4) Graph + tariffs
-  const [uiStep, setUiStep] = useState(1)
+  // 0) Welcome/title page, 1) Postcode input, 2) Scraping globe,
+  // 3) Optimiser inputs, 4) Graph + tariffs, 5) Cost projection
+  const [uiStep, setUiStep] = useState(0)
   const [annualConsumptionKwh, setAnnualConsumptionKwh] = useState('')
   const [scrapeLoaded, setScrapeLoaded] = useState(false)
   const [scrapeTariffCount, setScrapeTariffCount] = useState(null)
@@ -184,6 +185,10 @@ export function App() {
   useEffect(() => {
     const base = 'PowerPlan'
     const byStep = {
+      0: {
+        title: 'PowerPlan - UK Home Energy Planning',
+        description: 'Compare UK electricity tariffs and model solar, wind, insulation and heat-pump upgrades with PowerPlan.',
+      },
       1: {
         title: 'PowerPlan - Home Energy Planning in the UK',
         description: 'Enter your UK postcode and usage to start comparing energy tariffs and optimisation options.',
@@ -677,6 +682,49 @@ export function App() {
       5: 'This page helps you think ahead. It compares long-term cumulative costs across different upgrade paths, making it easier to see where bigger upfront investment could lead to lower lifetime energy spend.',
     }[uiStep] || 'PowerPlan compares tariffs and home energy upgrade choices to help you make a more confident decision.'
   )
+
+  if (uiStep === 0) {
+    return (
+      <div className="wrap welcome-wrap">
+        <div className="welcome">
+          <div className="welcome-hero">
+            <img src={FAVICON_PATH} alt="PowerPlan logo" className="welcome-logo" />
+            <h1 className="welcome-title">PowerPlan</h1>
+            <p className="welcome-tagline">Smart energy planning for UK homes</p>
+          </div>
+          <p className="welcome-description">
+            PowerPlan helps you compare UK electricity tariffs, estimate your annual running
+            costs, and explore how upgrades like solar, wind, insulation and heat pumps could
+            change your bills over time. Enter your postcode, answer a handful of questions
+            about your home, and get tailored recommendations backed by real tariff and weather
+            data for your area.
+          </p>
+          <div className="welcome-features">
+            <div className="welcome-feature">
+              <div className="welcome-feature-title">Compare tariffs</div>
+              <p>See how the best electricity tariffs available at your postcode stack up against your actual usage.</p>
+            </div>
+            <div className="welcome-feature">
+              <div className="welcome-feature-title">Optimise your home</div>
+              <p>Model solar, wind, insulation and heat-pump upgrades against local weather and irradiance data.</p>
+            </div>
+            <div className="welcome-feature">
+              <div className="welcome-feature-title">Long-term projection</div>
+              <p>Explore cumulative costs over multiple years to see where upfront investment pays back.</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            className="btn welcome-cta"
+            onClick={() => setUiStep(1)}
+          >
+            Get started
+          </button>
+          <p className="welcome-footnote">Free to use • Built for UK postcodes • No sign-up required</p>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="wrap">
