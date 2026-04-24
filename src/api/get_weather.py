@@ -1,4 +1,5 @@
 from datetime import date
+import os
 
 import openmeteo_requests
 import pandas as pd
@@ -8,6 +9,50 @@ from retry_requests import retry
 # Forecast API (next ~16 days); use_archive=True uses Historical Weather API (past data).
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
+
+
+def _is_quota_error(err: Exception) -> bool:
+    """Best-effort detection for provider quota / rate-limit responses."""
+    text = str(err).lower()
+    return any(token in text for token in ("429", "limit", "quota", "too many requests"))
+
+
+def _fetch_with_provider_failover(openmeteo_client, url, base_params, use_archive):
+    """
+    Try the configured primary provider/model first, then gracefully fallback.
+    Primary forecast model defaults to `ukmo_seamless` and can be overridden by
+    OPENMETEO_PRIMARY_MODEL. If quota-limited (or primary call fails), fallback
+    uses Open-Meteo default model routing by omitting the `models` parameter.
+    """
+    attempts = []
+
+    if use_archive:
+        attempts.append(("open-meteo archive", dict(base_params)))
+    else:
+        primary_model = (os.environ.get("OPENMETEO_PRIMARY_MODEL") or "ukmo_seamless").strip()
+        primary = dict(base_params)
+        if primary_model:
+            primary["models"] = primary_model
+        attempts.append((f"open-meteo forecast model={primary_model}", primary))
+        fallback = dict(base_params)
+        attempts.append(("open-meteo forecast model=auto", fallback))
+
+    last_error = None
+    for attempt_name, params in attempts:
+        try:
+            return openmeteo_client.weather_api(url, params=params)[0]
+        except Exception as err:
+            last_error = err
+            print(f"[weather] provider attempt failed: {attempt_name}: {err}", flush=True)
+            # If this is not quota related, still try fallback when available.
+            # Non-quota transient/provider errors can be recovered by model fallback too.
+            continue
+
+    if last_error is not None:
+        if _is_quota_error(last_error):
+            raise RuntimeError(f"Weather provider quota reached across all fallback attempts: {last_error}") from last_error
+        raise RuntimeError(f"Weather provider failed across all fallback attempts: {last_error}") from last_error
+    raise RuntimeError("Weather provider failed with no error details.")
 
 
 def get_weather(latitude, longitude, start_date, end_date, variables, frequency, use_archive=False):
@@ -103,15 +148,18 @@ def get_weather(latitude, longitude, start_date, end_date, variables, frequency,
         "start_date": start_date,
         "end_date": end_date,
     }
-    if not use_archive:
-        params["models"] = "ukmo_seamless"
     if frequency == "hourly":
         params["hourly"] = variables
     else:
         params["daily"] = variables
         params["timezone"] = "UTC"
 
-    response_first = openmeteo.weather_api(url, params=params)[0]
+    response_first = _fetch_with_provider_failover(
+        openmeteo_client=openmeteo,
+        url=url,
+        base_params=params,
+        use_archive=use_archive,
+    )
 
     response = response_first.Hourly() if frequency == "hourly" else response_first.Daily()
     data = {
