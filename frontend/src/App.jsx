@@ -693,13 +693,9 @@ export function App() {
             <p className="welcome-tagline">Smart energy planning for UK homes</p>
           </div>
           <p className="welcome-description">
-            I noticed that it is very difficult to get affordable advice on green energy installations 
-            to power your home on sustainable energies and save money.
-
-            PowerPlan helps you compare UK electricity tariffs, estimate your annual running
-            costs, and explore how upgrades like solar, wind, insulation and heat pumps could
-            change your bills over time using real weather and energy cost predictions. Enter your postcode, answer a handful of questions
-            about your home, and get tailored recommendations backed by real tariff and weather
+            PowerPlan helps you compare UK energy tariffs, estimate annual 
+            costs, and explore how technology could reduce your bills over time. Enter your postcode, answer a handful of questions
+            about your home, and get tailored recommendations using real tariff and weather
             data for your area.
           </p>
           <div className="welcome-features">
