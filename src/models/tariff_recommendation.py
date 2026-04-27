@@ -88,6 +88,10 @@ def recommend_tariff(
     wind_max_kw: float = 10.0,
     min_solar_kw: float = 0.0,
     min_wind_kw: float = 0.5,
+    battery_type_params: dict[str, Any] | None = None,
+    battery_max_kwh: float = 0.0,
+    battery_min_kwh: float = 0.0,
+    battery_step_kwh: float = 1.0,
     prefer_green: bool = False,
 ) -> dict[str, Any]:
     """
@@ -161,6 +165,11 @@ def recommend_tariff(
     wind_capex = float(
         wind_type_params.get("wind_capex_per_kw", DEFAULT_PRICING["wind_capex_per_kw"])
     )
+    battery_capex = float(
+        (battery_type_params or {}).get(
+            "battery_capex_per_kwh", DEFAULT_PRICING["battery_capex_per_kwh"]
+        )
+    )
 
     optimisation_result = get_optimised_system(
         latitude,
@@ -173,6 +182,7 @@ def recommend_tariff(
             "export_price_per_kwh": export_price_per_kwh,
             "solar_capex_per_kw": solar_capex,
             "wind_capex_per_kw": wind_capex,
+            "battery_capex_per_kwh": battery_capex,
         },
         solar_max_kw=solar_max_kw,
         wind_max_kw=wind_max_kw,
@@ -183,6 +193,10 @@ def recommend_tariff(
         heating_fraction=heating_fraction,
         insulation_r_value=insulation_r_value,
         heat_pump_cop=heat_pump_cop,
+        battery_type_params=battery_type_params,
+        battery_max_kwh=battery_max_kwh,
+        battery_min_kwh=battery_min_kwh,
+        battery_step_kwh=battery_step_kwh,
     )
 
     capex = optimisation_result["capex"]

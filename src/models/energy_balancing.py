@@ -26,9 +26,24 @@ __all__ = [
 DEFAULT_PRICING = {
     "solar_capex_per_kw": 1500.0,
     "wind_capex_per_kw": 2500.0,
+    "battery_capex_per_kwh": 800.0,
     "grid_price_per_kwh": 0.25,
     "export_price_per_kwh": 0.05,
 }
+
+# Battery defaults (used when no tier params supplied)
+DEFAULT_BATTERY = {
+    "round_trip_efficiency": 0.90,
+    "depth_of_discharge": 0.90,
+    "cycles_per_day": 0.85,
+    "battery_capex_per_kwh": DEFAULT_PRICING["battery_capex_per_kwh"],
+}
+
+# Intraday mismatch factors (fraction of monthly self-consumption that is, in reality,
+# time-shifted across the day and would otherwise become export+later-import without storage).
+# Solar peaks midday → high mismatch with evening loads; wind is spread → lower mismatch.
+INTRADAY_MISMATCH_SOLAR = 0.45
+INTRADAY_MISMATCH_WIND = 0.20
 
 # Insulation: R-value (m²·K/W). Heating demand is reduced by _insulation_reduction(r_value).
 # Typical UK: uninsulated wall ~2, well insulated ~5. Scale chosen so e.g. R=5 → ~40% heating reduction.
@@ -320,6 +335,100 @@ def _monthly_generation_breakdown(
     return solar_list, wind_list
 
 
+def _battery_adjusted_monthly_balance(
+    monthly_solar_kwh: list[float],
+    monthly_wind_kwh: list[float],
+    monthly_demand_kwh: list[float],
+    days_in_month: list[int],
+    battery_kwh: float,
+    battery_params: dict[str, Any] | None,
+) -> tuple[list[float], list[float], float, float]:
+    """
+    Apply intraday mismatch + battery time-shifting to a 12-month gen/demand schedule.
+
+    Returns (monthly_import_kwh, monthly_export_kwh, annual_import, annual_export).
+
+    Model:
+      - The monthly "perfect match" assumption hides intraday mismatch, so we add back
+        a realistic export+import pair scaled by INTRADAY_MISMATCH_SOLAR/WIND on the
+        self-consumed portion (solar generates by day, typical demand peaks evening).
+      - A battery (size B kWh) shifts up to (B × DoD × cycles/day × days_in_month) kWh
+        per month from would-be export back to would-be import, with round-trip eff η.
+    """
+    bp = battery_params or {}
+    eta = float(bp.get("round_trip_efficiency", 0.0)) if battery_kwh > 0 else 0.0
+    dod = float(bp.get("depth_of_discharge", 0.0)) if battery_kwh > 0 else 0.0
+    cycles_per_day = float(bp.get("cycles_per_day", 0.0)) if battery_kwh > 0 else 0.0
+    has_battery = battery_kwh > 0 and eta > 0 and dod > 0 and cycles_per_day > 0
+
+    monthly_import: list[float] = []
+    monthly_export: list[float] = []
+    for i in range(12):
+        gen = max(0.0, monthly_solar_kwh[i] + monthly_wind_kwh[i])
+        demand = max(0.0, monthly_demand_kwh[i])
+        solar = max(0.0, monthly_solar_kwh[i])
+        wind = max(0.0, monthly_wind_kwh[i])
+
+        # Net monthly imbalance under the perfect-match assumption
+        net_export = max(0.0, gen - demand)
+        net_import = max(0.0, demand - gen)
+
+        # Intraday mismatch: a slice of the would-be-self-consumed energy is exported by
+        # day and replaced by import at night, even when the month is net-balanced.
+        matched = min(gen, demand)
+        if gen > 0:
+            intraday_factor = (
+                INTRADAY_MISMATCH_SOLAR * (solar / gen)
+                + INTRADAY_MISMATCH_WIND * (wind / gen)
+            )
+        else:
+            intraday_factor = 0.0
+        intraday_pair = matched * intraday_factor
+
+        realistic_export = net_export + intraday_pair
+        realistic_import = net_import + intraday_pair
+
+        if has_battery:
+            # Throughput at the load side (energy delivered from battery to home, kWh)
+            throughput_to_load = battery_kwh * dod * cycles_per_day * float(days_in_month[i])
+            # We can shift at most (export × η) kWh from gen-to-load; capped by import + throughput
+            charge_available = realistic_export * eta
+            shift_to_load = min(realistic_import, charge_available, throughput_to_load)
+            new_import = realistic_import - shift_to_load
+            new_export = realistic_export - (shift_to_load / eta if eta > 0 else 0.0)
+            new_export = max(0.0, new_export)
+            new_import = max(0.0, new_import)
+        else:
+            new_import = realistic_import
+            new_export = realistic_export
+
+        monthly_import.append(new_import)
+        monthly_export.append(new_export)
+
+    return monthly_import, monthly_export, sum(monthly_import), sum(monthly_export)
+
+
+def _battery_adjusted_annual_balance(
+    annual_solar_kwh: float,
+    annual_wind_kwh: float,
+    annual_demand_kwh: float,
+    battery_kwh: float,
+    battery_params: dict[str, Any] | None,
+) -> tuple[float, float]:
+    """
+    Daily-flux fallback: collapse the year into a single bucket scaled to 365 days
+    and apply the same intraday-mismatch + battery-shift model. Returns (import, export).
+    """
+    monthly_solar = [annual_solar_kwh / 12.0] * 12
+    monthly_wind = [annual_wind_kwh / 12.0] * 12
+    monthly_demand = [annual_demand_kwh / 12.0] * 12
+    days = [30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 35]  # ~365
+    _, _, ann_imp, ann_exp = _battery_adjusted_monthly_balance(
+        monthly_solar, monthly_wind, monthly_demand, days, battery_kwh, battery_params
+    )
+    return ann_imp, ann_exp
+
+
 def optimize_system_capacity(
     flux: pd.DataFrame,
     annual_consumption_kwh: float,
@@ -338,19 +447,28 @@ def optimize_system_capacity(
     min_solar_kw: float = 0.0,
     min_wind_kw: float = 0.5,
     monthly_demand_kwh: list[float] | None = None,
+    battery_type_params: dict[str, Any] | None = None,
+    battery_capex_per_kwh: float = DEFAULT_PRICING["battery_capex_per_kwh"],
+    battery_max_kwh: float = 0.0,
+    battery_min_kwh: float = 0.0,
+    battery_step_kwh: float = 1.0,
 ) -> dict[str, Any]:
     """
-    Find solar and wind capacity (kW) that minimises total cost over `optimize_over_years`.
+    Find solar/wind/battery sizing that minimises total cost over `optimize_over_years`.
     Flux can be daily (short period, then annualised) or monthly (12 rows from last year, no scaling).
     Demand is annual_consumption_kwh.
     min_demand_met_from_gen_pct: require at least this % of demand from own generation (0–100);
         avoids choosing 0 kW when grid-only is cheapest.
     min_solar_kw, min_wind_kw: only consider solutions with at least this much solar/wind (default 0.5 kW wind).
+    battery_type_params: tier params dict (round_trip_efficiency, depth_of_discharge,
+        cycles_per_day) — when None or battery_max_kwh<=0, battery sweep is skipped.
+    battery_max_kwh, battery_min_kwh, battery_step_kwh: usable battery size search bounds.
 
-    Returns dict with optimal_solar_kw, optimal_wind_kw, annual_demand_kwh, annual_generation_kwh,
-    demand_met_from_generation_pct, capex, annual_import_kwh, annual_export_kwh, annual_net_opex,
-    financials_0_year, financials_5_year, financials_10_year, and monthly_balance (DataFrame of
-    solar/wind/demand/import/export by month when flux is monthly; None otherwise).
+    Returns dict with optimal_solar_kw, optimal_wind_kw, optimal_battery_kwh,
+    annual_demand_kwh, annual_generation_kwh, demand_met_from_generation_pct, capex
+    (and component capex), annual_import_kwh, annual_export_kwh, annual_net_opex,
+    financials_0/5/10_year, and monthly_balance (DataFrame of solar/wind/demand/
+    import/export by month when flux is monthly; None otherwise).
     """
     if flux_frequency is None:
         flux_frequency = (
@@ -368,6 +486,17 @@ def optimize_system_capacity(
         raise ValueError("flux must contain at least one day or 12 months")
     export_price = export_price_per_kwh
 
+    # Pre-compute the demand schedule once (used for the monthly balance + battery model).
+    if monthly_demand_kwh and len(monthly_demand_kwh) == 12 and sum(monthly_demand_kwh) > 0:
+        scale = annual_consumption_kwh / float(sum(monthly_demand_kwh))
+        demand_schedule = [float(x) * scale for x in monthly_demand_kwh]
+    else:
+        demand_schedule = [annual_consumption_kwh / 12.0] * 12
+    if flux_frequency == "monthly" and len(flux) == 12 and "days_in_month" in flux.columns:
+        days_schedule = [int(flux.loc[m, "days_in_month"]) for m in flux.index]
+    else:
+        days_schedule = [30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 35]
+
     def annual_gen(solar_kw: float, wind_kw: float) -> tuple[float, float]:
         if flux_frequency == "monthly":
             return _annual_generation_from_flux_monthly(
@@ -377,9 +506,40 @@ def optimize_system_capacity(
             flux, solar_kw, wind_kw, solar_type_params, wind_type_params
         )
 
+    def annual_balance_with_battery(
+        solar_kw: float, wind_kw: float, battery_kwh: float
+    ) -> tuple[float, float, float, float, float]:
+        """Returns (annual_solar, annual_wind, total_gen, annual_import, annual_export)."""
+        if flux_frequency == "monthly":
+            monthly_solar, monthly_wind = _monthly_generation_breakdown(
+                flux, solar_kw, wind_kw, solar_type_params, wind_type_params
+            )
+            ann_solar = sum(monthly_solar)
+            ann_wind = sum(monthly_wind)
+            _, _, ann_imp, ann_exp = _battery_adjusted_monthly_balance(
+                monthly_solar, monthly_wind, demand_schedule, days_schedule,
+                battery_kwh, battery_type_params,
+            )
+        else:
+            ann_solar, ann_wind = _annual_generation_from_flux(
+                flux, solar_kw, wind_kw, solar_type_params, wind_type_params
+            )
+            ann_imp, ann_exp = _battery_adjusted_annual_balance(
+                ann_solar, ann_wind, annual_consumption_kwh, battery_kwh, battery_type_params,
+            )
+        return ann_solar, ann_wind, ann_solar + ann_wind, ann_imp, ann_exp
+
+    # Battery sweep range — clamped to non-negative and at least one point at 0.
+    bat_max = max(0.0, float(battery_max_kwh))
+    bat_min = max(0.0, float(battery_min_kwh))
+    bat_step = max(0.1, float(battery_step_kwh))
+    if bat_max < bat_min:
+        bat_max = bat_min
+
     best_total_cost: float = float("inf")
     best_solar = 0.0
     best_wind = 0.0
+    best_battery = 0.0
     best_annual_import = 0.0
     best_annual_export = 0.0
     best_annual_gen = 0.0
@@ -390,30 +550,42 @@ def optimize_system_capacity(
     while solar_kw <= solar_max_kw:
         wind_kw = min_wind_kw
         while wind_kw <= wind_max_kw:
-            annual_solar, annual_wind = annual_gen(solar_kw, wind_kw)
-            total_annual_gen = annual_solar + annual_wind
-            demand_met_pct = (total_annual_gen / annual_consumption_kwh * 100.0) if annual_consumption_kwh > 0 else 0.0
+            total_annual_gen_only = sum(annual_gen(solar_kw, wind_kw))
+            demand_met_pct = (total_annual_gen_only / annual_consumption_kwh * 100.0) if annual_consumption_kwh > 0 else 0.0
             if min_demand_met_from_gen_pct > 0 and demand_met_pct < min_demand_met_from_gen_pct:
                 wind_kw += step_kw
                 if wind_kw > wind_max_kw:
                     break
                 continue
-            annual_import = max(0.0, annual_consumption_kwh - total_annual_gen)
-            annual_export = max(0.0, total_annual_gen - annual_consumption_kwh)
-            capex = solar_kw * solar_capex_per_kw + wind_kw * wind_capex_per_kw
-            annual_opex_import = annual_import * grid_price_per_kwh
-            annual_opex_export_revenue = annual_export * export_price
-            annual_net_opex = annual_opex_import - annual_opex_export_revenue
-            total_cost = capex + annual_net_opex * optimize_over_years
-            if total_cost < best_total_cost:
-                best_total_cost = total_cost
-                best_solar = solar_kw
-                best_wind = wind_kw
-                best_annual_import = annual_import
-                best_annual_export = annual_export
-                best_annual_gen = total_annual_gen
-                best_annual_solar = annual_solar
-                best_annual_wind = annual_wind
+            battery_kwh = bat_min
+            while battery_kwh <= bat_max:
+                annual_solar, annual_wind, total_annual_gen, annual_import, annual_export = (
+                    annual_balance_with_battery(solar_kw, wind_kw, battery_kwh)
+                )
+                capex = (
+                    solar_kw * solar_capex_per_kw
+                    + wind_kw * wind_capex_per_kw
+                    + battery_kwh * battery_capex_per_kwh
+                )
+                annual_opex_import = annual_import * grid_price_per_kwh
+                annual_opex_export_revenue = annual_export * export_price
+                annual_net_opex = annual_opex_import - annual_opex_export_revenue
+                total_cost = capex + annual_net_opex * optimize_over_years
+                if total_cost < best_total_cost:
+                    best_total_cost = total_cost
+                    best_solar = solar_kw
+                    best_wind = wind_kw
+                    best_battery = battery_kwh
+                    best_annual_import = annual_import
+                    best_annual_export = annual_export
+                    best_annual_gen = total_annual_gen
+                    best_annual_solar = annual_solar
+                    best_annual_wind = annual_wind
+                if bat_max <= 0:
+                    break
+                battery_kwh += bat_step
+                if battery_kwh > bat_max:
+                    break
             wind_kw += step_kw
             if wind_kw > wind_max_kw:
                 break
@@ -421,15 +593,16 @@ def optimize_system_capacity(
         if solar_kw > solar_max_kw:
             break
 
-    capex = best_solar * solar_capex_per_kw + best_wind * wind_capex_per_kw
     solar_capex = best_solar * solar_capex_per_kw
     wind_capex = best_wind * wind_capex_per_kw
+    battery_capex = best_battery * battery_capex_per_kwh
+    capex = solar_capex + wind_capex + battery_capex
     opex_import = best_annual_import * grid_price_per_kwh
     opex_export_revenue = best_annual_export * export_price
     annual_net_opex = opex_import - opex_export_revenue
     demand_met_pct = (best_annual_gen / annual_consumption_kwh * 100.0) if annual_consumption_kwh > 0 else 0.0
 
-    # Payback: years for each technology's capex to be recovered by its annual savings (import offset + export revenue)
+    # Payback: per-technology capex recovered by its annual savings (import offset + export revenue)
     total_export = best_annual_export
     if best_annual_gen > 0:
         solar_share = best_annual_solar / best_annual_gen
@@ -446,29 +619,45 @@ def optimize_system_capacity(
     payback_solar_years = round(solar_capex / annual_solar_savings, 1) if (solar_capex > 0 and annual_solar_savings > 0) else None
     payback_wind_years = round(wind_capex / annual_wind_savings, 1) if (wind_capex > 0 and annual_wind_savings > 0) else None
 
+    # Battery payback: compare annual opex with vs without battery at fixed solar/wind
+    payback_battery_years: float | None = None
+    if battery_capex > 0 and best_battery > 0:
+        if flux_frequency == "monthly":
+            ms, mw = _monthly_generation_breakdown(
+                flux, best_solar, best_wind, solar_type_params, wind_type_params
+            )
+            _, _, imp_no_bat, exp_no_bat = _battery_adjusted_monthly_balance(
+                ms, mw, demand_schedule, days_schedule, 0.0, battery_type_params,
+            )
+        else:
+            imp_no_bat, exp_no_bat = _battery_adjusted_annual_balance(
+                best_annual_solar, best_annual_wind, annual_consumption_kwh,
+                0.0, battery_type_params,
+            )
+        opex_no_bat = imp_no_bat * grid_price_per_kwh - exp_no_bat * export_price
+        annual_battery_savings = opex_no_bat - annual_net_opex
+        if annual_battery_savings > 0:
+            payback_battery_years = round(battery_capex / annual_battery_savings, 1)
+
     # Monthly breakdown over the year (when we have monthly flux) for exploring solar vs wind by month
     monthly_balance: pd.DataFrame | None = None
     if flux_frequency == "monthly" and len(flux) == 12:
         monthly_solar, monthly_wind = _monthly_generation_breakdown(
             flux, best_solar, best_wind, solar_type_params, wind_type_params
         )
-        # Seasonal demand split for display/plotting only.
-        # If the caller passes a monthly series, scale it to match `annual_consumption_kwh`.
-        if monthly_demand_kwh and len(monthly_demand_kwh) == 12 and sum(monthly_demand_kwh) > 0:
-            scale = annual_consumption_kwh / float(sum(monthly_demand_kwh))
-            monthly_demand = [float(x) * scale for x in monthly_demand_kwh]
-        else:
-            monthly_demand = [annual_consumption_kwh / 12.0] * 12
-        monthly_import = [max(0.0, monthly_demand[i] - monthly_solar[i] - monthly_wind[i]) for i in range(12)]
-        monthly_export = [max(0.0, monthly_solar[i] + monthly_wind[i] - monthly_demand[i]) for i in range(12)]
+        monthly_demand = demand_schedule
+        monthly_import_b, monthly_export_b, _, _ = _battery_adjusted_monthly_balance(
+            monthly_solar, monthly_wind, monthly_demand, days_schedule,
+            best_battery, battery_type_params,
+        )
         monthly_balance = pd.DataFrame({
             "month": MONTH_LABELS,
             "solar_kwh": [round(x, 1) for x in monthly_solar],
             "wind_kwh": [round(x, 1) for x in monthly_wind],
             "total_gen_kwh": [round(monthly_solar[i] + monthly_wind[i], 1) for i in range(12)],
             "demand_kwh": [round(monthly_demand[i], 1) for i in range(12)],
-            "import_kwh": [round(monthly_import[i], 1) for i in range(12)],
-            "export_kwh": [round(monthly_export[i], 1) for i in range(12)],
+            "import_kwh": [round(monthly_import_b[i], 1) for i in range(12)],
+            "export_kwh": [round(monthly_export_b[i], 1) for i in range(12)],
         })
 
     def _financials(n_years: float) -> dict[str, float]:
@@ -482,6 +671,7 @@ def optimize_system_capacity(
     return {
         "optimal_solar_kw": round(best_solar, 2),
         "optimal_wind_kw": round(best_wind, 2),
+        "optimal_battery_kwh": round(best_battery, 2),
         "total_capacity_kw": round(best_solar + best_wind, 2),
         "annual_demand_kwh": round(annual_consumption_kwh, 1),
         "annual_generation_kwh": round(best_annual_gen, 1),
@@ -493,9 +683,11 @@ def optimize_system_capacity(
         "capex": round(capex, 2),
         "solar_capex": round(solar_capex, 2),
         "wind_capex": round(wind_capex, 2),
+        "battery_capex": round(battery_capex, 2),
         "annual_net_opex": round(annual_net_opex, 2),
         "payback_solar_years": payback_solar_years,
         "payback_wind_years": payback_wind_years,
+        "payback_battery_years": payback_battery_years,
         "financials_0_year": _financials(0),
         "financials_5_year": _financials(5),
         "financials_10_year": _financials(10),
@@ -519,9 +711,12 @@ def evaluate_fixed_capacities(
     flux_source: Literal["forecast", "last_year_monthly"] = "last_year_monthly",
     start_date: str | None = None,
     end_date: str | None = None,
+    battery_kwh: float = 0.0,
+    battery_type_params: dict[str, Any] | None = None,
+    battery_capex_per_kwh: float = DEFAULT_PRICING["battery_capex_per_kwh"],
 ) -> dict[str, float]:
     """
-    Annual import/export and capex for fixed solar/wind sizes (no optimisation).
+    Annual import/export and capex for fixed solar/wind/battery sizes (no optimisation).
     Uses the same demand model as get_optimised_system and weather flux for generation.
     """
     demand_adj = demand_after_insulation_and_heat_pump(
@@ -544,20 +739,30 @@ def evaluate_fixed_capacities(
 
     sk = max(0.0, float(solar_kw))
     wk = max(0.0, float(wind_kw))
+    bk = max(0.0, float(battery_kwh))
     if flux_frequency == "monthly":
-        annual_solar, annual_wind = _annual_generation_from_flux_monthly(
+        ms, mw = _monthly_generation_breakdown(
             flux, sk, wk, solar_type_params, wind_type_params
+        )
+        annual_solar = sum(ms)
+        annual_wind = sum(mw)
+        days_schedule = [int(flux.loc[m, "days_in_month"]) for m in flux.index]
+        demand_schedule = [demand_for_optimisation / 12.0] * 12
+        _, _, annual_import, annual_export = _battery_adjusted_monthly_balance(
+            ms, mw, demand_schedule, days_schedule, bk, battery_type_params,
         )
     else:
         annual_solar, annual_wind = _annual_generation_from_flux(
             flux, sk, wk, solar_type_params, wind_type_params
         )
+        annual_import, annual_export = _battery_adjusted_annual_balance(
+            annual_solar, annual_wind, demand_for_optimisation, bk, battery_type_params,
+        )
     total_gen = annual_solar + annual_wind
-    annual_import = max(0.0, demand_for_optimisation - total_gen)
-    annual_export = max(0.0, total_gen - demand_for_optimisation)
     solar_capex_per_kw = float(solar_type_params.get("solar_capex_per_kw", DEFAULT_PRICING["solar_capex_per_kw"]))
     wind_capex_per_kw = float(wind_type_params.get("wind_capex_per_kw", DEFAULT_PRICING["wind_capex_per_kw"]))
-    capex = sk * solar_capex_per_kw + wk * wind_capex_per_kw
+    bat_capex_per_kwh = float((battery_type_params or {}).get("battery_capex_per_kwh", battery_capex_per_kwh))
+    capex = sk * solar_capex_per_kw + wk * wind_capex_per_kw + bk * bat_capex_per_kwh
     return {
         "annual_demand_kwh": round(demand_for_optimisation, 1),
         "annual_import_kwh": round(annual_import, 1),
@@ -565,6 +770,7 @@ def evaluate_fixed_capacities(
         "annual_generation_kwh": round(total_gen, 1),
         "solar_kw": round(sk, 2),
         "wind_kw": round(wk, 2),
+        "battery_kwh": round(bk, 2),
         "capex_gbp": round(capex, 2),
         "insulation_r_value": float(insulation_r_value),
     }
@@ -590,9 +796,13 @@ def get_optimised_system(
     heating_fraction: float = 0.6,
     insulation_r_value: float = 0.0,
     heat_pump_cop: float = 1.0,
+    battery_type_params: dict[str, Any] | None = None,
+    battery_max_kwh: float = 0.0,
+    battery_min_kwh: float = 0.0,
+    battery_step_kwh: float = 1.0,
 ) -> dict[str, Any]:
     """
-    Size and price a solar and wind system for a location and annual demand.
+    Size and price a solar/wind/battery system for a location and annual demand.
     Flux can be from a short forecast (daily, then annualised) or from last year's
     monthly historical data (12 months, no scaling).
     Demand can be reduced by insulation (lower heating demand) and heat pump (less electricity per unit heat).
@@ -699,6 +909,15 @@ def get_optimised_system(
         min_solar_kw=min_solar_kw,
         min_wind_kw=min_wind_kw,
         monthly_demand_kwh=monthly_demand_kwh if flux_frequency == "monthly" else None,
+        battery_type_params=battery_type_params,
+        battery_capex_per_kwh=float(
+            (battery_type_params or {}).get(
+                "battery_capex_per_kwh", pr.get("battery_capex_per_kwh", DEFAULT_PRICING["battery_capex_per_kwh"])
+            )
+        ),
+        battery_max_kwh=battery_max_kwh,
+        battery_min_kwh=battery_min_kwh,
+        battery_step_kwh=battery_step_kwh,
     )
     result["flux_source"] = flux_source
     result["flux_period_days"] = result.pop("period_days")

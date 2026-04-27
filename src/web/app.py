@@ -472,6 +472,7 @@ def api_recommend():
         heat_pump_cop = float(data.get("heat_pump_cop", 1.0))
         solar_tier = (data.get("solar_tier") or "budget").lower()
         wind_tier = (data.get("wind_tier") or "budget").lower()
+        battery_tier = (data.get("battery_tier") or "none").lower()
         export_price_per_kwh = float(data.get("export_price_per_kwh", 0.05))
         optimize_over_years = float(data.get("optimize_over_years", 5))
         prefer_green = bool(data.get("prefer_green", False))
@@ -479,10 +480,15 @@ def api_recommend():
         wind_max_kw = float(data.get("wind_max_kw", 10.0))
         min_solar_kw = float(data.get("min_solar_kw", 0.0))
         min_wind_kw = float(data.get("min_wind_kw", 0.5))
+        battery_max_kwh = float(data.get("battery_max_kwh", 20.0))
+        battery_min_kwh = float(data.get("battery_min_kwh", 0.0))
+        battery_step_kwh = float(data.get("battery_step_kwh", 1.0))
         if solar_tier == "none":
             solar_max_kw, min_solar_kw = 0.0, 0.0
         if wind_tier == "none":
             wind_max_kw, min_wind_kw = 0.0, 0.0
+        if battery_tier == "none":
+            battery_max_kwh, battery_min_kwh = 0.0, 0.0
     except (TypeError, ValueError) as e:
         return jsonify({"error": f"Invalid input: {e}"}), 400
 
@@ -510,10 +516,11 @@ def api_recommend():
         })
 
     from src.models.tariff_recommendation import recommend_tariff
-    from src.data.energy_tiers import SOLAR_TIERS, WIND_TIERS
+    from src.data.energy_tiers import SOLAR_TIERS, WIND_TIERS, BATTERY_TIERS
 
     solar_type = SOLAR_TIERS.get(solar_tier, SOLAR_TIERS["budget"])
     wind_type = WIND_TIERS.get(wind_tier, WIND_TIERS["budget"])
+    battery_type = BATTERY_TIERS.get(battery_tier, BATTERY_TIERS["none"])
 
     try:
         rec = recommend_tariff(
@@ -533,6 +540,10 @@ def api_recommend():
             wind_max_kw=max(0.0, wind_max_kw),
             min_solar_kw=max(0.0, min_solar_kw),
             min_wind_kw=max(0.0, min_wind_kw),
+            battery_type_params=battery_type if battery_tier != "none" else None,
+            battery_max_kwh=max(0.0, battery_max_kwh),
+            battery_min_kwh=max(0.0, battery_min_kwh),
+            battery_step_kwh=max(0.1, battery_step_kwh),
         )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -548,6 +559,7 @@ def api_recommend():
         "optimization": {
             "optimal_solar_kw": float(opt["optimal_solar_kw"]),
             "optimal_wind_kw": float(opt["optimal_wind_kw"]),
+            "optimal_battery_kwh": float(opt.get("optimal_battery_kwh", 0.0)),
             "total_capacity_kw": float(opt["total_capacity_kw"]),
             "annual_demand_kwh": float(opt["annual_demand_kwh"]),
             "annual_demand_before_adjustments_kwh": float(opt.get("annual_demand_before_adjustments_kwh", opt["annual_demand_kwh"])),
@@ -565,8 +577,10 @@ def api_recommend():
             "capex": float(opt["capex"]),
             "solar_capex": float(opt["solar_capex"]),
             "wind_capex": float(opt["wind_capex"]),
+            "battery_capex": float(opt.get("battery_capex", 0.0)),
             "payback_solar_years": opt.get("payback_solar_years"),
             "payback_wind_years": opt.get("payback_wind_years"),
+            "payback_battery_years": opt.get("payback_battery_years"),
         },
         "optimize_over_years": rec["optimize_over_years"],
         "total_cost_best_gbp": rec["ranking"][0]["total_cost_gbp"] if rec["ranking"] else None,
@@ -600,8 +614,10 @@ def api_cost_projection():
         upgraded_insulation = float(data.get("upgraded_insulation_r_value", 6.0))
         scenario_solar_kw = float(data.get("scenario_solar_kw", 4.0))
         scenario_wind_kw = float(data.get("scenario_wind_kw", 2.0))
+        scenario_battery_kwh = float(data.get("scenario_battery_kwh", 0.0))
         solar_tier = (data.get("solar_tier") or "mid").lower()
         wind_tier = (data.get("wind_tier") or "mid").lower()
+        battery_tier = (data.get("battery_tier") or "none").lower()
         if solar_tier == "none":
             solar_tier = "mid"
         if wind_tier == "none":
@@ -615,23 +631,26 @@ def api_cost_projection():
         return jsonify({"error": "unit_rate_p_per_kwh required (p/kWh from your best or chosen tariff)"}), 400
 
     from src.models.energy_balancing import evaluate_fixed_capacities
-    from src.data.energy_tiers import SOLAR_TIERS, WIND_TIERS
+    from src.data.energy_tiers import SOLAR_TIERS, WIND_TIERS, BATTERY_TIERS
 
     solar_params = SOLAR_TIERS.get(solar_tier, SOLAR_TIERS["mid"])
     wind_params = WIND_TIERS.get(wind_tier, WIND_TIERS["mid"])
+    battery_params = (
+        BATTERY_TIERS.get(battery_tier, BATTERY_TIERS["mid"]) if battery_tier != "none" else None
+    )
     grid_gbp_per_kwh = unit_rate_p / 100.0
     standing_gbp_per_year = 365.0 * (standing_p_day / 100.0)
 
-    # All 2^3 = 8 combinations of the three upgrade technologies: Solar, Wind, Insulation.
+    # Combinations of upgrade technologies: Solar, Wind, Insulation (+ Battery when sized > 0).
     # Each scenario's `techs` list is a stable, sorted set of tech keys so the frontend can render
     # consistent badges and group by "individual / pairs / full" without hard-coding each id.
     def _combo_label(techs: list[str]) -> str:
         if not techs:
             return f"Baseline — grid only (R {baseline_insulation:g})"
-        pretty = {"solar": "Solar", "wind": "Wind", "insulation": "Insulation"}
+        pretty = {"solar": "Solar", "wind": "Wind", "insulation": "Insulation", "battery": "Battery"}
         return " + ".join(pretty[t] for t in techs)
 
-    combos = [
+    base_combos = [
         [],
         ["solar"],
         ["wind"],
@@ -641,6 +660,14 @@ def api_cost_projection():
         ["wind", "insulation"],
         ["solar", "wind", "insulation"],
     ]
+    combos = list(base_combos)
+    include_battery = scenario_battery_kwh > 0 and battery_params is not None
+    if include_battery:
+        # Battery only adds value when there's local generation, so pair it with combos
+        # that already include solar or wind.
+        for c in base_combos:
+            if "solar" in c or "wind" in c:
+                combos.append(c + ["battery"])
     scenario_defs = []
     for techs in combos:
         sid = "combo_baseline" if not techs else "combo_" + "_".join(techs)
@@ -651,6 +678,7 @@ def api_cost_projection():
             "insulation_r_value": upgraded_insulation if "insulation" in techs else baseline_insulation,
             "solar_kw": scenario_solar_kw if "solar" in techs else 0.0,
             "wind_kw": scenario_wind_kw if "wind" in techs else 0.0,
+            "battery_kwh": scenario_battery_kwh if "battery" in techs else 0.0,
         })
     if isinstance(scenario_ids, list) and scenario_ids:
         want = {str(x) for x in scenario_ids}
@@ -670,6 +698,8 @@ def api_cost_projection():
                 sc["wind_kw"],
                 solar_params,
                 wind_params,
+                battery_kwh=sc.get("battery_kwh", 0.0),
+                battery_type_params=battery_params,
             )
             imp = float(ev["annual_import_kwh"])
             exp = float(ev["annual_export_kwh"])
@@ -683,6 +713,7 @@ def api_cost_projection():
                 "techs": sc.get("techs", []),
                 "solar_kw": sc["solar_kw"],
                 "wind_kw": sc["wind_kw"],
+                "battery_kwh": sc.get("battery_kwh", 0.0),
                 "insulation_r_value": sc["insulation_r_value"],
                 "cumulative_gbp": cumulative,
                 "annual_running_gbp": round(annual_running_gbp, 2),

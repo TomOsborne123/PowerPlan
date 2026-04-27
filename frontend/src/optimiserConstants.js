@@ -15,6 +15,16 @@ export const WIND_TIER_INFO = {
   premium: { label: 'Premium', capexPerKw: 3300, blurb: 'Higher-spec turbine / install assumptions.' },
 }
 
+export const BATTERY_TIER_INFO = {
+  none: { label: "No — I don't want a battery", capexPerKwh: 0, blurb: 'Battery is fixed at 0 kWh and excluded from the search.' },
+  budget: { label: 'Budget', capexPerKwh: 600, blurb: 'Entry-level home battery (~85% round-trip).' },
+  mid: { label: 'Mid', capexPerKwh: 800, blurb: 'Modern lithium battery (~90% round-trip).' },
+  premium: { label: 'Premium', capexPerKwh: 1050, blurb: 'High-spec battery + inverter (~94% round-trip).' },
+}
+
+/** Default usable battery sizes (kWh) used in the cost-projection scenario. */
+export const PROJECTION_SCENARIO_BATTERY_KWH = { none: 0, budget: 5, mid: 8, premium: 12 }
+
 /** Fixed kWp used only on the cost-projection step (independent of optimiser tier sliders). */
 export const PROJECTION_SCENARIO_SOLAR_KW = { budget: 3, mid: 4.5, premium: 6 }
 /** Fixed kW nominal used only on the cost-projection step. */

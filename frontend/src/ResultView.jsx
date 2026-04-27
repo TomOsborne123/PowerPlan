@@ -75,7 +75,7 @@ export function ResultView({ result, optimiserControls }) {
             <div key={p.name} className="custom-hover-row">
               <span className="custom-hover-name">{p.name}</span>
               <span className="custom-hover-sep">:</span>
-              <span className="custom-hover-value">{p.value.toFixed(2)} kWh (this month)</span>
+              <span className="custom-hover-value">{p.value.toFixed(2)} kWh</span>
             </div>
           ))}
           {normalized.length === 0 ? <div className="custom-hover-value">—</div> : null}
@@ -84,9 +84,14 @@ export function ResultView({ result, optimiserControls }) {
     )
   }
 
+  const batterySize = Number(opt.optimal_battery_kwh ?? 0)
+  const hasBattery = Number.isFinite(batterySize) && batterySize > 0
   const systemSizingTiles = [
     { value: opt.optimal_solar_kw, label: 'Solar size (kW)', info: 'Optimal solar capacity selected by the optimiser.' },
     { value: opt.optimal_wind_kw, label: 'Wind size (kW)', info: 'Optimal wind capacity selected by the optimiser.' },
+    ...(hasBattery
+      ? [{ value: batterySize, label: 'Battery size (kWh)', info: 'Optimal usable battery capacity selected by the optimiser. The model captures intra-day mismatch between generation and demand and shifts surplus generation back to self-consumption.' }]
+      : []),
     { value: opt.total_capacity_kw, label: 'Total generation size (kW)', info: 'Solar and wind capacities added together.' },
   ]
   const annualEnergyTiles = [
@@ -97,9 +102,12 @@ export function ResultView({ result, optimiserControls }) {
     { value: `${opt.demand_met_from_generation_pct.toFixed(1)}%`, label: 'Demand met by own generation', info: 'Percentage of your electricity demand met by on-site solar and wind.' },
   ]
   const investmentTiles = [
-    { value: `£${Math.round(opt.capex)}`, label: 'Upfront investment (capex)', info: 'Total upfront cost (solar + wind) from the selected tier assumptions.' },
+    { value: `£${Math.round(opt.capex)}`, label: 'Upfront investment (capex)', info: 'Total upfront cost (solar + wind + battery) from the selected tier assumptions.' },
     { value: opt.payback_solar_years != null ? `${opt.payback_solar_years} yr` : '—', label: 'Solar payback period', info: 'Estimated years to recover solar capex from savings and export revenue.' },
     { value: opt.payback_wind_years != null ? `${opt.payback_wind_years} yr` : '—', label: 'Wind payback period', info: 'Estimated years to recover wind capex from savings and export revenue.' },
+    ...(hasBattery
+      ? [{ value: opt.payback_battery_years != null ? `${opt.payback_battery_years} yr` : '—', label: 'Battery payback period', info: 'Estimated years to recover battery capex from extra self-consumption savings versus the same system without storage.' }]
+      : []),
   ]
 
   const annualTotalInclCapexFor = (r) => {
@@ -139,7 +147,8 @@ export function ResultView({ result, optimiserControls }) {
   const paybackYears = (() => {
     const s = Number(opt.payback_solar_years)
     const w = Number(opt.payback_wind_years)
-    const candidates = [s, w].filter((v) => Number.isFinite(v) && v > 0)
+    const b = Number(opt.payback_battery_years)
+    const candidates = [s, w, b].filter((v) => Number.isFinite(v) && v > 0)
     if (candidates.length === 0) return null
     return Math.min(...candidates)
   })()
@@ -275,17 +284,19 @@ export function ResultView({ result, optimiserControls }) {
               </span>
             </div>
             {chartData.length > 0 ? (
-              <div style={{ width: '100%', height: 170 }}>
+              <div style={{ width: '100%', height: 220 }}>
                 <ResponsiveContainer>
-                  <LineChart data={chartData} margin={{ top: 6, right: 12, left: 4, bottom: 2 }}>
+                  <LineChart data={chartData} margin={{ top: 8, right: 14, left: 20, bottom: 26 }}>
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis
                       dataKey="month"
-                      label={{ value: 'Calendar month', position: 'insideBottom', offset: -2, style: { fontSize: 11 } }}
+                      tick={{ fontSize: 12 }}
+                      label={{ value: 'Calendar month', position: 'bottom', offset: 10, style: { fontSize: 14, fontWeight: 600 } }}
                     />
                     <YAxis
-                      width={44}
-                      label={{ value: 'Energy (kWh/month)', angle: -90, position: 'insideLeft', offset: 10, style: { textAnchor: 'middle', fontSize: 11 } }}
+                      width={58}
+                      tick={{ fontSize: 12 }}
+                      label={{ value: 'Energy (kWh/month)', angle: -90, position: 'left', offset: 8, style: { textAnchor: 'middle', fontSize: 14, fontWeight: 600 } }}
                     />
                     <Tooltip content={(props) => <CustomTooltip {...props} />} />
                     <Line type="monotone" dataKey="solar_kwh" name="Solar" stroke="#f59e0b" strokeWidth={2} dot={false} />

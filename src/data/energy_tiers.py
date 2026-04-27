@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
-__all__ = ["SOLAR_TIERS", "WIND_TIERS", "HEAT_PUMP_TIERS"]
+__all__ = ["SOLAR_TIERS", "WIND_TIERS", "HEAT_PUMP_TIERS", "BATTERY_TIERS"]
 
 # Solar: per-kWp parameters for daily GHI-to-energy conversion
 # solar_capex_per_kw: illustrative installed cost (£/kWp) for MVP comparisons — not a quote.
@@ -120,5 +120,47 @@ HEAT_PUMP_TIERS: dict[str, dict[str, Any]] = {
         "cost_band": "high",
         "label": "Efficient ASHP",
         "spec_url": "https://mcscertified.com/",
+    },
+}
+
+
+# Battery tiers: round-trip efficiency, depth-of-discharge, daily cycles assumption,
+# and indicative installed cost per usable kWh.
+# round_trip_efficiency: AC→DC→AC efficiency (combined inverter + cell).
+# depth_of_discharge: usable share of nameplate capacity.
+# cycles_per_day: typical daily full-equivalent cycles (residential solar+small wind ~ 0.7–1.0).
+# battery_capex_per_kwh: illustrative installed cost (£/kWh usable) for MVP — not a quote.
+BATTERY_TIERS: dict[str, dict[str, Any]] = {
+    "none": {
+        "round_trip_efficiency": 0.0,
+        "depth_of_discharge": 0.0,
+        "cycles_per_day": 0.0,
+        "cost_band": "n/a",
+        "battery_capex_per_kwh": 0.0,
+        "label": "No battery",
+    },
+    "budget": {
+        "round_trip_efficiency": 0.85,
+        "depth_of_discharge": 0.85,
+        "cycles_per_day": 0.7,
+        "cost_band": "low",
+        "battery_capex_per_kwh": 600.0,
+        "label": "Budget — entry-level home battery",
+    },
+    "mid": {
+        "round_trip_efficiency": 0.90,
+        "depth_of_discharge": 0.90,
+        "cycles_per_day": 0.85,
+        "cost_band": "medium",
+        "battery_capex_per_kwh": 800.0,
+        "label": "Mid — modern lithium home battery",
+    },
+    "premium": {
+        "round_trip_efficiency": 0.94,
+        "depth_of_discharge": 0.95,
+        "cycles_per_day": 1.0,
+        "cost_band": "high",
+        "battery_capex_per_kwh": 1050.0,
+        "label": "Premium — high-spec battery + inverter",
     },
 }

@@ -14,8 +14,10 @@ import {
   INSULATION_OPTIONS,
   PROJECTION_SCENARIO_SOLAR_KW,
   PROJECTION_SCENARIO_WIND_KW,
+  PROJECTION_SCENARIO_BATTERY_KWH,
   SOLAR_TIER_INFO,
   WIND_TIER_INFO,
+  BATTERY_TIER_INFO,
   copForHeatPumpTier,
 } from './optimiserConstants'
 import { ResultView } from './ResultView'
@@ -31,7 +33,7 @@ export function App() {
   const [latitude, setLatitude] = useState(null)
   const [longitude, setLongitude] = useState(null)
   const [postcodeDistrict, setPostcodeDistrict] = useState('')
-  const [addressName, setAddressName] = useState('')
+  const [addressName, setAddressName] = useState('1 Savings Lane')
   // Controls the single-screen "step" experience:
   // 0) Welcome/title page, 1) Postcode input, 2) Scraping globe,
   // 3) Optimiser inputs, 4) Graph + tariffs, 5) Cost projection
@@ -51,6 +53,9 @@ export function App() {
   const [exportPriceHint, setExportPriceHint] = useState('')
   const [solarTier, setSolarTier] = useState('budget')
   const [windTier, setWindTier] = useState('budget')
+  const [batteryTier, setBatteryTier] = useState('none')
+  const [batteryMaxKwhInput, setBatteryMaxKwhInput] = useState(15)
+  const [projectionBatteryTier, setProjectionBatteryTier] = useState('none')
   const [exportPricePerKwh, setExportPricePerKwh] = useState(0.05)
   const [optimizeOverYears, setOptimizeOverYears] = useState(5)
   const [preferGreen, setPreferGreen] = useState(false)
@@ -80,6 +85,8 @@ export function App() {
   const [optimiserQuestionIdx, setOptimiserQuestionIdx] = useState(0)
   const [projectionSolarTier, setProjectionSolarTier] = useState('mid')
   const [projectionWindTier, setProjectionWindTier] = useState('mid')
+  // Which tariff (by rank) drives the cost projection chart. Defaults to #1 (best).
+  const [projectionTariffRank, setProjectionTariffRank] = useState(1)
   const debounceRef = useRef(null)
   const requestSeqRef = useRef(0)
   const stepAdvanceTimerRef = useRef(null)
@@ -105,6 +112,9 @@ export function App() {
       if (typeof saved.heatPumpTier === 'string') setHeatPumpTier(saved.heatPumpTier)
       if (typeof saved.solarTier === 'string') setSolarTier(saved.solarTier)
       if (typeof saved.windTier === 'string') setWindTier(saved.windTier)
+      if (typeof saved.batteryTier === 'string') setBatteryTier(saved.batteryTier)
+      if (typeof saved.batteryMaxKwhInput === 'number') setBatteryMaxKwhInput(saved.batteryMaxKwhInput)
+      if (typeof saved.projectionBatteryTier === 'string') setProjectionBatteryTier(saved.projectionBatteryTier)
       if (typeof saved.preferGreen === 'boolean') setPreferGreen(saved.preferGreen)
       if (typeof saved.optimizeOverYears === 'number') setOptimizeOverYears(saved.optimizeOverYears)
       if (typeof saved.projectionYears === 'number') setProjectionYears(saved.projectionYears)
@@ -129,11 +139,14 @@ export function App() {
         heatPumpTier,
         solarTier,
         windTier,
+        batteryTier,
+        batteryMaxKwhInput,
         preferGreen,
         optimizeOverYears,
         projectionYears,
         projectionSolarTier,
         projectionWindTier,
+        projectionBatteryTier,
       }
       window.localStorage.setItem(PERSIST_KEY, JSON.stringify(payload))
     } catch {
@@ -150,11 +163,14 @@ export function App() {
     heatPumpTier,
     solarTier,
     windTier,
+    batteryTier,
+    batteryMaxKwhInput,
     preferGreen,
     optimizeOverYears,
     projectionYears,
     projectionSolarTier,
     projectionWindTier,
+    projectionBatteryTier,
   ])
 
   useEffect(() => {
@@ -252,6 +268,21 @@ export function App() {
   const postcodeInputValid = normalizedPostcode && (isOutwardOnlyPostcode(normalizedPostcode) || isFullPostcode(normalizedPostcode))
   const postcodeGeocodable = normalizedPostcode && isFullPostcode(normalizedPostcode)
   const hasCoords = Number.isFinite(latitude) && Number.isFinite(longitude)
+  const heatingIdx = Math.max(0, HEATING_SHARE_OPTIONS.findIndex((o) => o.value === heatingFraction))
+  const insulationIdx = Math.max(0, INSULATION_OPTIONS.findIndex((o) => o.value === insulationRValue))
+  const heatPumpIdx = Math.max(0, HEAT_PUMP_OPTIONS.findIndex((o) => o.value === heatPumpTier))
+  const solarTierEntries = Object.entries(SOLAR_TIER_INFO)
+  const solarIdx = Math.max(0, solarTierEntries.findIndex(([k]) => k === solarTier))
+  const windTierEntries = Object.entries(WIND_TIER_INFO)
+  const windIdx = Math.max(0, windTierEntries.findIndex(([k]) => k === windTier))
+  const batteryTierEntries = Object.entries(BATTERY_TIER_INFO)
+  const batteryIdx = Math.max(0, batteryTierEntries.findIndex(([k]) => k === batteryTier))
+  const heatingPct = HEATING_SHARE_OPTIONS.length > 1 ? (heatingIdx / (HEATING_SHARE_OPTIONS.length - 1)) * 100 : 0
+  const insulationPct = INSULATION_OPTIONS.length > 1 ? (insulationIdx / (INSULATION_OPTIONS.length - 1)) * 100 : 0
+  const heatPumpPct = HEAT_PUMP_OPTIONS.length > 1 ? (heatPumpIdx / (HEAT_PUMP_OPTIONS.length - 1)) * 100 : 0
+  const solarPct = solarTierEntries.length > 1 ? (solarIdx / (solarTierEntries.length - 1)) * 100 : 0
+  const windPct = windTierEntries.length > 1 ? (windIdx / (windTierEntries.length - 1)) * 100 : 0
+  const batteryPct = batteryTierEntries.length > 1 ? (batteryIdx / (batteryTierEntries.length - 1)) * 100 : 0
 
   const loadFromScrape = async (triggeredByEnter = false) => {
     const norm = normalizePostcode(postcode)
@@ -512,10 +543,13 @@ export function App() {
       }
       const solarOff = solarTier === 'none'
       const windOff = windTier === 'none'
+      const batteryOff = batteryTier === 'none'
       const solarMaxKwTyped = Number(solarMaxKwInput)
       const windMaxKwTyped = Number(windMaxKwInput)
+      const batteryMaxKwhTyped = Number(batteryMaxKwhInput)
       const solarMaxKw = solarOff ? 0 : Math.max(0, Number.isFinite(solarMaxKwTyped) ? solarMaxKwTyped : 0)
       const windMaxKw = windOff ? 0 : Math.max(0, Number.isFinite(windMaxKwTyped) ? windMaxKwTyped : 0)
+      const batteryMaxKwh = batteryOff ? 0 : Math.max(0, Number.isFinite(batteryMaxKwhTyped) ? batteryMaxKwhTyped : 0)
       // Scale the minimum capacities proportionally to the user's chosen max so the optimiser
       // is nudged into a range near the typed value (otherwise it often sticks at the default).
       const solarMinKwBase = 1.5 * (solarMaxKw / 20)
@@ -535,9 +569,13 @@ export function App() {
         heat_pump_cop: heatPumpCop,
         solar_tier: solarTier,
         wind_tier: windTier,
+        battery_tier: batteryTier,
         export_price_per_kwh: exportPrice,
         solar_max_kw: solarMaxKw,
         wind_max_kw: windMaxKw,
+        battery_max_kwh: batteryMaxKwh,
+        battery_min_kwh: 0,
+        battery_step_kwh: 1,
         min_solar_kw: solarMinKw,
         min_wind_kw: windMinKw,
         optimize_over_years: optimizeOverYears,
@@ -570,13 +608,19 @@ export function App() {
 
   const runCostProjection = async ({ showErrors = true, background = false } = {}) => {
     const norm = normalizePostcode(postcode)
-    const bestTariff = result?.ranking?.[0]?.tariff || result?.recommended_tariff
+    const ranking = Array.isArray(result?.ranking) ? result.ranking : []
+    const selectedRanked = ranking.find((r) => r?.rank === projectionTariffRank) || ranking[0] || null
+    const bestTariff = selectedRanked?.tariff || result?.recommended_tariff
     const usageRaw = (annualConsumptionKwh ?? '').toString().trim()
     const usageBase = usageRaw === '' ? undefined : Number(usageRaw.replace(',', '.'))
     const usage = usageBase == null ? undefined : Math.max(0, usageBase * (1 + demandPct / 100))
     const heatPumpCop = copForHeatPumpTier(heatPumpTier)
     const solarScenarioKw = Math.max(0, PROJECTION_SCENARIO_SOLAR_KW[projectionSolarTier] ?? PROJECTION_SCENARIO_SOLAR_KW.mid)
     const windScenarioKw = Math.max(0, PROJECTION_SCENARIO_WIND_KW[projectionWindTier] ?? PROJECTION_SCENARIO_WIND_KW.mid)
+    const batteryScenarioKwh = Math.max(
+      0,
+      PROJECTION_SCENARIO_BATTERY_KWH[projectionBatteryTier] ?? PROJECTION_SCENARIO_BATTERY_KWH.none,
+    )
     if (!bestTariff) return false
     if (background) setProjectionLoading(true)
     else setLoading(true)
@@ -596,8 +640,10 @@ export function App() {
         upgraded_insulation_r_value: Math.max(4.0, insulationRValue),
         scenario_solar_kw: solarScenarioKw,
         scenario_wind_kw: windScenarioKw,
+        scenario_battery_kwh: batteryScenarioKwh,
         solar_tier: projectionSolarTier,
         wind_tier: projectionWindTier,
+        battery_tier: projectionBatteryTier,
         tariff_label: `${bestTariff.supplier_name || 'Tariff'} — ${bestTariff.tariff_name || ''}`.trim(),
       })
       setProjection(out)
@@ -631,6 +677,7 @@ export function App() {
   }, [
     solarMaxKwInput,
     windMaxKwInput,
+    batteryMaxKwhInput,
     demandPct,
     exportPricePct,
     heatingFraction,
@@ -638,6 +685,7 @@ export function App() {
     heatPumpTier,
     solarTier,
     windTier,
+    batteryTier,
     exportPricePerKwh,
     optimizeOverYears,
     preferGreen,
@@ -666,13 +714,26 @@ export function App() {
     heatPumpTier,
     projectionSolarTier,
     projectionWindTier,
+    projectionBatteryTier,
+    projectionTariffRank,
     exportPricePerKwh,
     exportPricePct,
     projectionYears,
   ])
 
-  const appOverviewText =
-    'PowerPlan helps you compare UK electricity tariffs, estimate annual running costs, and explore how upgrades like solar, wind, insulation, and heat pumps could change your bills over time.'
+  // Whenever a fresh recommendation arrives, snap the projection back to the top-ranked tariff
+  // (otherwise a previously-selected rank might no longer exist).
+  useEffect(() => {
+    if (!result) return
+    const ranks = Array.isArray(result.ranking)
+      ? result.ranking.map((r) => r?.rank).filter((n) => Number.isFinite(n))
+      : []
+    if (ranks.length === 0) return
+    if (!ranks.includes(projectionTariffRank)) {
+      setProjectionTariffRank(ranks[0])
+    }
+  }, [result])
+
   const pageFunctionText = (
     {
       1: 'This page gathers the key starting details for your plan. Enter your postcode, add an optional address hint to help match the property, and include your annual electricity use so PowerPlan can build a comparison around your home.',
@@ -772,7 +833,6 @@ export function App() {
           </nav>
         </div>
       </div>
-      <p className="app-overview-text">{appOverviewText}</p>
       <p className="page-function-text">{pageFunctionText}</p>
 
       {error && (
@@ -839,7 +899,7 @@ export function App() {
                 onChange={(e) => {
                   setPostcode(e.target.value)
                   setPostcodeDistrict('')
-                  setAddressName('')
+                  setAddressName('1 Savings Lane')
                   // Each postcode has its own saved usage; prevent carry-over from the previous postcode.
                   setAnnualConsumptionKwh('')
                   setUiStep(1)
@@ -880,23 +940,8 @@ export function App() {
                 id="address_name"
                 value={addressName}
                 onChange={(e) => setAddressName(e.target.value)}
-                placeholder="e.g. Chalfont Lodge or 14 High Street"
+                placeholder="e.g. 1 Savings Lane"
                 autoComplete="off"
-              />
-            </div>
-            <div>
-              <label htmlFor="annual_consumption_kwh">
-                Annual electricity use (kWh)
-                <InfoIcon text="Your baseline annual electricity demand (before insulation/heat pump adjustments)." />
-              </label>
-              <input
-                type="text"
-                id="annual_consumption_kwh"
-                value={annualConsumptionKwh}
-                onChange={(e) => setAnnualConsumptionKwh(e.target.value)}
-                inputMode="decimal"
-                spellCheck={false}
-                placeholder="Optional"
               />
             </div>
           </div>
@@ -988,7 +1033,7 @@ export function App() {
       {uiStep === 3 && (scrapeLoaded || scraping || tariffScrapePending) && (
         <form onSubmit={handleSubmit} className="card">
           <h2>Optimiser questions</h2>
-          <p className="field-hint">Question {optimiserQuestionIdx + 1} of 7</p>
+          <p className="field-hint">Question {optimiserQuestionIdx + 1} of 8</p>
 
           {(scraping || tariffScrapePending) && (
             <div className="scrape-inline-status" role="status" aria-live="polite">
@@ -1018,70 +1063,245 @@ export function App() {
 
           {optimiserQuestionIdx === 0 && (
             <div>
-              <label htmlFor="heating_fraction">
+              <label className="block-label">
                 How much of your electricity is heating?
                 <InfoIcon text="Rough share of your yearly electricity use used for space heating (not hot water)." />
               </label>
-              <select id="heating_fraction" value={heatingFraction} onChange={(e) => setHeatingFraction(Number(e.target.value))}>
-                {HEATING_SHARE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-              </select>
+              <input
+                type="range"
+                id="heating_fraction"
+                className="preference-slider"
+                min={0}
+                max={HEATING_SHARE_OPTIONS.length - 1}
+                step={1}
+                value={heatingIdx}
+                style={{ '--slider-fill': `${heatingPct}%` }}
+                onChange={(e) => {
+                  const idx = Number(e.target.value)
+                  setHeatingFraction(HEATING_SHARE_OPTIONS[idx].value)
+                }}
+              />
+              <div className="field-hint" style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span>Low</span>
+                <span>High</span>
+              </div>
+              <p className="field-hint preference-current">{HEATING_SHARE_OPTIONS[heatingIdx].label}</p>
+              <div className="preference-scale-guide" role="list" aria-label="Heating share levels">
+                {HEATING_SHARE_OPTIONS.map((o, idx) => (
+                  <div key={o.value} role="listitem" className={`preference-level ${idx === heatingIdx ? 'active' : ''}`}>
+                    <span className="preference-level-index">{idx + 1}</span>
+                    <span className="preference-level-text">{o.label}</span>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 
           {optimiserQuestionIdx === 1 && (
             <div>
-              <label htmlFor="insulation_r_value">
+              <label className="block-label">
                 Home insulation (fabric)
                 <InfoIcon text="Higher insulation means less heating demand." />
               </label>
-              <select id="insulation_r_value" value={insulationRValue} onChange={(e) => setInsulationRValue(Number(e.target.value))}>
-                {INSULATION_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-              </select>
+              <input
+                type="range"
+                id="insulation_r_value"
+                className="preference-slider"
+                min={0}
+                max={INSULATION_OPTIONS.length - 1}
+                step={1}
+                value={insulationIdx}
+                style={{ '--slider-fill': `${insulationPct}%` }}
+                onChange={(e) => {
+                  const idx = Number(e.target.value)
+                  setInsulationRValue(INSULATION_OPTIONS[idx].value)
+                }}
+              />
+              <div className="field-hint" style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span>Lower</span>
+                <span>Higher</span>
+              </div>
+              <p className="field-hint preference-current">{INSULATION_OPTIONS[insulationIdx].label}</p>
+              <div className="preference-scale-guide" role="list" aria-label="Insulation levels">
+                {INSULATION_OPTIONS.map((o, idx) => (
+                  <div key={o.value} role="listitem" className={`preference-level ${idx === insulationIdx ? 'active' : ''}`}>
+                    <span className="preference-level-index">{idx + 1}</span>
+                    <span className="preference-level-text">{o.label}</span>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 
           {optimiserQuestionIdx === 2 && (
             <div>
-              <label htmlFor="heat_pump_tier">
+              <label className="block-label">
                 Heat pump type
                 <InfoIcon text="Choose the heat-pump efficiency assumption (or No heat pump)." />
               </label>
-              <select id="heat_pump_tier" value={heatPumpTier} onChange={(e) => setHeatPumpTier(e.target.value)}>
-                {HEAT_PUMP_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-              </select>
+              <input
+                type="range"
+                id="heat_pump_tier"
+                className="preference-slider"
+                min={0}
+                max={HEAT_PUMP_OPTIONS.length - 1}
+                step={1}
+                value={heatPumpIdx}
+                style={{ '--slider-fill': `${heatPumpPct}%` }}
+                onChange={(e) => {
+                  const idx = Number(e.target.value)
+                  setHeatPumpTier(HEAT_PUMP_OPTIONS[idx].value)
+                }}
+              />
+              <div className="field-hint" style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span>No heat pump</span>
+                <span>Premium</span>
+              </div>
+              <p className="field-hint preference-current">{HEAT_PUMP_OPTIONS[heatPumpIdx].label}</p>
               <p className="field-hint">Model COP ≈ {copForHeatPumpTier(heatPumpTier)}</p>
+              <div className="preference-scale-guide" role="list" aria-label="Heat pump levels">
+                {HEAT_PUMP_OPTIONS.map((o, idx) => (
+                  <div key={o.value} role="listitem" className={`preference-level ${idx === heatPumpIdx ? 'active' : ''}`}>
+                    <span className="preference-level-index">{idx + 1}</span>
+                    <span className="preference-level-text">{o.label}</span>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 
           {optimiserQuestionIdx === 3 && (
             <div>
-              <label htmlFor="solar_tier">
+              <label className="block-label">
                 Solar cost band
                 <InfoIcon text="Indicative installed cost/performance band for solar." />
               </label>
-              <select id="solar_tier" value={solarTier} onChange={(e) => setSolarTier(e.target.value)}>
-                {Object.entries(SOLAR_TIER_INFO).map(([k, v]) => (
-                  <option key={k} value={k}>{v.label} — ~£{v.capexPerKw.toLocaleString('en-GB')}/kWp · {v.blurb}</option>
+              <input
+                type="range"
+                id="solar_tier"
+                className="preference-slider"
+                min={0}
+                max={solarTierEntries.length - 1}
+                step={1}
+                value={solarIdx}
+                style={{ '--slider-fill': `${solarPct}%` }}
+                onChange={(e) => {
+                  const idx = Number(e.target.value)
+                  setSolarTier(solarTierEntries[idx][0])
+                }}
+              />
+              <div className="field-hint" style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span>No solar</span>
+                <span>Premium</span>
+              </div>
+              <p className="field-hint preference-current">
+                {solarTierEntries[solarIdx][1].label} — ~£{solarTierEntries[solarIdx][1].capexPerKw.toLocaleString('en-GB')}/kWp · {solarTierEntries[solarIdx][1].blurb}
+              </p>
+              <div className="preference-scale-guide" role="list" aria-label="Solar tier levels">
+                {solarTierEntries.map(([k, v], idx) => (
+                  <div key={k} role="listitem" className={`preference-level ${idx === solarIdx ? 'active' : ''}`}>
+                    <span className="preference-level-index">{idx + 1}</span>
+                    <span className="preference-level-text">{v.label} — ~£{v.capexPerKw.toLocaleString('en-GB')}/kWp · {v.blurb}</span>
+                  </div>
                 ))}
-              </select>
+              </div>
             </div>
           )}
 
           {optimiserQuestionIdx === 4 && (
             <div>
-              <label htmlFor="wind_tier">
+              <label className="block-label">
                 Wind cost band
                 <InfoIcon text="Indicative installed cost/performance band for wind." />
               </label>
-              <select id="wind_tier" value={windTier} onChange={(e) => setWindTier(e.target.value)}>
-                {Object.entries(WIND_TIER_INFO).map(([k, v]) => (
-                  <option key={k} value={k}>{v.label} — ~£{v.capexPerKw.toLocaleString('en-GB')}/kW · {v.blurb}</option>
+              <input
+                type="range"
+                id="wind_tier"
+                className="preference-slider"
+                min={0}
+                max={windTierEntries.length - 1}
+                step={1}
+                value={windIdx}
+                style={{ '--slider-fill': `${windPct}%` }}
+                onChange={(e) => {
+                  const idx = Number(e.target.value)
+                  setWindTier(windTierEntries[idx][0])
+                }}
+              />
+              <div className="field-hint" style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span>No wind</span>
+                <span>Premium</span>
+              </div>
+              <p className="field-hint preference-current">
+                {windTierEntries[windIdx][1].label} — ~£{windTierEntries[windIdx][1].capexPerKw.toLocaleString('en-GB')}/kW · {windTierEntries[windIdx][1].blurb}
+              </p>
+              <div className="preference-scale-guide" role="list" aria-label="Wind tier levels">
+                {windTierEntries.map(([k, v], idx) => (
+                  <div key={k} role="listitem" className={`preference-level ${idx === windIdx ? 'active' : ''}`}>
+                    <span className="preference-level-index">{idx + 1}</span>
+                    <span className="preference-level-text">{v.label} — ~£{v.capexPerKw.toLocaleString('en-GB')}/kW · {v.blurb}</span>
+                  </div>
                 ))}
-              </select>
+              </div>
             </div>
           )}
 
           {optimiserQuestionIdx === 5 && (
+            <div>
+              <label className="block-label">
+                Battery cost band
+                <InfoIcon text="Indicative installed cost/performance band for a home battery (£ per usable kWh)." />
+              </label>
+              <input
+                type="range"
+                id="battery_tier"
+                className="preference-slider"
+                min={0}
+                max={batteryTierEntries.length - 1}
+                step={1}
+                value={batteryIdx}
+                style={{ '--slider-fill': `${batteryPct}%` }}
+                onChange={(e) => {
+                  const idx = Number(e.target.value)
+                  setBatteryTier(batteryTierEntries[idx][0])
+                }}
+              />
+              <div className="field-hint" style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span>No battery</span>
+                <span>Premium</span>
+              </div>
+              <p className="field-hint preference-current">
+                {batteryTierEntries[batteryIdx][1].label} — ~£{batteryTierEntries[batteryIdx][1].capexPerKwh.toLocaleString('en-GB')}/kWh · {batteryTierEntries[batteryIdx][1].blurb}
+              </p>
+              <div className="preference-scale-guide" role="list" aria-label="Battery tier levels">
+                {batteryTierEntries.map(([k, v], idx) => (
+                  <div key={k} role="listitem" className={`preference-level ${idx === batteryIdx ? 'active' : ''}`}>
+                    <span className="preference-level-index">{idx + 1}</span>
+                    <span className="preference-level-text">{v.label} — ~£{v.capexPerKwh.toLocaleString('en-GB')}/kWh · {v.blurb}</span>
+                  </div>
+                ))}
+              </div>
+              {batteryTier !== 'none' && (
+                <div style={{ marginTop: '0.8rem' }}>
+                  <label htmlFor="battery_max_kwh">
+                    Largest usable battery to consider (kWh)
+                    <InfoIcon text="The optimiser searches battery sizes from 0 up to this limit and picks the best fit." />
+                  </label>
+                  <input
+                    type="number"
+                    id="battery_max_kwh"
+                    value={batteryMaxKwhInput}
+                    onChange={(e) => setBatteryMaxKwhInput(Number(e.target.value))}
+                    min={1}
+                    max={50}
+                    step={1}
+                  />
+                </div>
+              )}
+            </div>
+          )}
+
+          {optimiserQuestionIdx === 6 && (
             <div>
               <label className="block-label">
                 Prefer green tariffs?
@@ -1100,7 +1320,7 @@ export function App() {
             </div>
           )}
 
-          {optimiserQuestionIdx === 6 && (
+          {optimiserQuestionIdx === 7 && (
             <div>
               <label htmlFor="optimize_over_years">
                 Compare costs over how many years?
@@ -1127,11 +1347,11 @@ export function App() {
             >
               Back
             </button>
-            {optimiserQuestionIdx < 6 ? (
+            {optimiserQuestionIdx < 7 ? (
               <button
                 type="button"
                 className="btn"
-                onClick={() => setOptimiserQuestionIdx((q) => Math.min(6, q + 1))}
+                onClick={() => setOptimiserQuestionIdx((q) => Math.min(7, q + 1))}
               >
                 Next
               </button>
@@ -1201,6 +1421,25 @@ export function App() {
 
                 <div className="form-row col2" style={{ marginTop: '0.35rem' }}>
                   <div>
+                    <label htmlFor="annual_consumption_kwh_analytics">
+                      Annual electricity use (kWh)
+                      <InfoIcon text="Defaults from scraped postcode data when available. You can edit it here for what-if analysis." />
+                    </label>
+                    <input
+                      type="text"
+                      id="annual_consumption_kwh_analytics"
+                      value={annualConsumptionKwh}
+                      onChange={(e) => setAnnualConsumptionKwh(e.target.value)}
+                      inputMode="decimal"
+                      spellCheck={false}
+                      placeholder="e.g. 3500"
+                    />
+                  </div>
+                  <div />
+                </div>
+
+                <div className="form-row col2" style={{ marginTop: '0.35rem' }}>
+                  <div>
                     <label htmlFor="demand_pct">
                       Home electricity usage adjustment ({demandPct}%)
                       <InfoIcon text="Scales your baseline annual electricity use up or down." />
@@ -1250,6 +1489,25 @@ export function App() {
                     />
                   </div>
                 </div>
+
+                <div className="form-row col2" style={{ marginTop: '0.35rem' }}>
+                  <div>
+                    <label htmlFor="battery_max_kwh_results">
+                      Battery maximum size (kWh)
+                      <InfoIcon text="Upper bound on usable battery storage the optimiser may choose. Set the cost band to ‘No battery’ to exclude storage entirely." />
+                    </label>
+                    <input
+                      type="number"
+                      id="battery_max_kwh_results"
+                      min={0}
+                      step={1}
+                      value={batteryMaxKwhInput}
+                      disabled={batteryTier === 'none'}
+                      onChange={(e) => setBatteryMaxKwhInput(e.target.value === '' ? '' : Number(e.target.value))}
+                    />
+                  </div>
+                  <div />
+                </div>
               </>
             }
           />
@@ -1264,8 +1522,18 @@ export function App() {
           selectedTechs={projectionTechs}
           projectionSolarTier={projectionSolarTier}
           projectionWindTier={projectionWindTier}
+          projectionBatteryTier={projectionBatteryTier}
+          tariffOptions={Array.isArray(result.ranking) ? result.ranking : []}
+          selectedTariffRank={projectionTariffRank}
+          onSelectTariffRank={(rank) => setProjectionTariffRank(Number(rank))}
           onProjectionSolarTier={setProjectionSolarTier}
           onProjectionWindTier={setProjectionWindTier}
+          onProjectionBatteryTier={(v) => {
+            setProjectionBatteryTier(v)
+            if (v === 'none') {
+              setProjectionTechs((prev) => prev.filter((x) => x !== 'battery'))
+            }
+          }}
           onYearsChange={(v) => setProjectionYears(v)}
           onToggleTech={(tech) => {
             setProjectionTechs((prev) => (
