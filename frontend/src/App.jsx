@@ -277,12 +277,6 @@ export function App() {
   const windIdx = Math.max(0, windTierEntries.findIndex(([k]) => k === windTier))
   const batteryTierEntries = Object.entries(BATTERY_TIER_INFO)
   const batteryIdx = Math.max(0, batteryTierEntries.findIndex(([k]) => k === batteryTier))
-  const heatingPct = HEATING_SHARE_OPTIONS.length > 1 ? (heatingIdx / (HEATING_SHARE_OPTIONS.length - 1)) * 100 : 0
-  const insulationPct = INSULATION_OPTIONS.length > 1 ? (insulationIdx / (INSULATION_OPTIONS.length - 1)) * 100 : 0
-  const heatPumpPct = HEAT_PUMP_OPTIONS.length > 1 ? (heatPumpIdx / (HEAT_PUMP_OPTIONS.length - 1)) * 100 : 0
-  const solarPct = solarTierEntries.length > 1 ? (solarIdx / (solarTierEntries.length - 1)) * 100 : 0
-  const windPct = windTierEntries.length > 1 ? (windIdx / (windTierEntries.length - 1)) * 100 : 0
-  const batteryPct = batteryTierEntries.length > 1 ? (batteryIdx / (batteryTierEntries.length - 1)) * 100 : 0
 
   const loadFromScrape = async (triggeredByEnter = false) => {
     const norm = normalizePostcode(postcode)
@@ -1067,31 +1061,28 @@ export function App() {
                 How much of your electricity is heating?
                 <InfoIcon text="Rough share of your yearly electricity use used for space heating (not hot water)." />
               </label>
-              <input
-                type="range"
-                id="heating_fraction"
-                className="preference-slider"
-                min={0}
-                max={HEATING_SHARE_OPTIONS.length - 1}
-                step={1}
-                value={heatingIdx}
-                style={{ '--slider-fill': `${heatingPct}%` }}
-                onChange={(e) => {
-                  const idx = Number(e.target.value)
-                  setHeatingFraction(HEATING_SHARE_OPTIONS[idx].value)
-                }}
-              />
               <div className="field-hint" style={{ display: 'flex', justifyContent: 'space-between' }}>
                 <span>Low</span>
                 <span>High</span>
               </div>
               <p className="field-hint preference-current">{HEATING_SHARE_OPTIONS[heatingIdx].label}</p>
-              <div className="preference-scale-guide" role="list" aria-label="Heating share levels">
+              <div
+                className="preference-scale-guide preference-radiogroup"
+                role="radiogroup"
+                aria-label="Heating share levels"
+              >
                 {HEATING_SHARE_OPTIONS.map((o, idx) => (
-                  <div key={o.value} role="listitem" className={`preference-level ${idx === heatingIdx ? 'active' : ''}`}>
+                  <button
+                    key={o.value}
+                    type="button"
+                    role="radio"
+                    aria-checked={idx === heatingIdx}
+                    className={`preference-level preference-option ${idx === heatingIdx ? 'active' : ''}`}
+                    onClick={() => setHeatingFraction(o.value)}
+                  >
                     <span className="preference-level-index">{idx + 1}</span>
                     <span className="preference-level-text">{o.label}</span>
-                  </div>
+                  </button>
                 ))}
               </div>
             </div>
@@ -1103,31 +1094,28 @@ export function App() {
                 Home insulation (fabric)
                 <InfoIcon text="Higher insulation means less heating demand." />
               </label>
-              <input
-                type="range"
-                id="insulation_r_value"
-                className="preference-slider"
-                min={0}
-                max={INSULATION_OPTIONS.length - 1}
-                step={1}
-                value={insulationIdx}
-                style={{ '--slider-fill': `${insulationPct}%` }}
-                onChange={(e) => {
-                  const idx = Number(e.target.value)
-                  setInsulationRValue(INSULATION_OPTIONS[idx].value)
-                }}
-              />
               <div className="field-hint" style={{ display: 'flex', justifyContent: 'space-between' }}>
                 <span>Lower</span>
                 <span>Higher</span>
               </div>
               <p className="field-hint preference-current">{INSULATION_OPTIONS[insulationIdx].label}</p>
-              <div className="preference-scale-guide" role="list" aria-label="Insulation levels">
+              <div
+                className="preference-scale-guide preference-radiogroup"
+                role="radiogroup"
+                aria-label="Insulation levels"
+              >
                 {INSULATION_OPTIONS.map((o, idx) => (
-                  <div key={o.value} role="listitem" className={`preference-level ${idx === insulationIdx ? 'active' : ''}`}>
+                  <button
+                    key={o.value}
+                    type="button"
+                    role="radio"
+                    aria-checked={idx === insulationIdx}
+                    className={`preference-level preference-option ${idx === insulationIdx ? 'active' : ''}`}
+                    onClick={() => setInsulationRValue(o.value)}
+                  >
                     <span className="preference-level-index">{idx + 1}</span>
                     <span className="preference-level-text">{o.label}</span>
-                  </div>
+                  </button>
                 ))}
               </div>
             </div>
@@ -1139,32 +1127,29 @@ export function App() {
                 Heat pump type
                 <InfoIcon text="Choose the heat-pump efficiency assumption (or No heat pump)." />
               </label>
-              <input
-                type="range"
-                id="heat_pump_tier"
-                className="preference-slider"
-                min={0}
-                max={HEAT_PUMP_OPTIONS.length - 1}
-                step={1}
-                value={heatPumpIdx}
-                style={{ '--slider-fill': `${heatPumpPct}%` }}
-                onChange={(e) => {
-                  const idx = Number(e.target.value)
-                  setHeatPumpTier(HEAT_PUMP_OPTIONS[idx].value)
-                }}
-              />
               <div className="field-hint" style={{ display: 'flex', justifyContent: 'space-between' }}>
                 <span>No heat pump</span>
                 <span>Premium</span>
               </div>
               <p className="field-hint preference-current">{HEAT_PUMP_OPTIONS[heatPumpIdx].label}</p>
               <p className="field-hint">Model COP ≈ {copForHeatPumpTier(heatPumpTier)}</p>
-              <div className="preference-scale-guide" role="list" aria-label="Heat pump levels">
+              <div
+                className="preference-scale-guide preference-radiogroup"
+                role="radiogroup"
+                aria-label="Heat pump levels"
+              >
                 {HEAT_PUMP_OPTIONS.map((o, idx) => (
-                  <div key={o.value} role="listitem" className={`preference-level ${idx === heatPumpIdx ? 'active' : ''}`}>
+                  <button
+                    key={o.value}
+                    type="button"
+                    role="radio"
+                    aria-checked={idx === heatPumpIdx}
+                    className={`preference-level preference-option ${idx === heatPumpIdx ? 'active' : ''}`}
+                    onClick={() => setHeatPumpTier(o.value)}
+                  >
                     <span className="preference-level-index">{idx + 1}</span>
                     <span className="preference-level-text">{o.label}</span>
-                  </div>
+                  </button>
                 ))}
               </div>
             </div>
@@ -1176,20 +1161,6 @@ export function App() {
                 Solar cost band
                 <InfoIcon text="Indicative installed cost/performance band for solar." />
               </label>
-              <input
-                type="range"
-                id="solar_tier"
-                className="preference-slider"
-                min={0}
-                max={solarTierEntries.length - 1}
-                step={1}
-                value={solarIdx}
-                style={{ '--slider-fill': `${solarPct}%` }}
-                onChange={(e) => {
-                  const idx = Number(e.target.value)
-                  setSolarTier(solarTierEntries[idx][0])
-                }}
-              />
               <div className="field-hint" style={{ display: 'flex', justifyContent: 'space-between' }}>
                 <span>No solar</span>
                 <span>Premium</span>
@@ -1197,12 +1168,19 @@ export function App() {
               <p className="field-hint preference-current">
                 {solarTierEntries[solarIdx][1].label} — ~£{solarTierEntries[solarIdx][1].capexPerKw.toLocaleString('en-GB')}/kWp · {solarTierEntries[solarIdx][1].blurb}
               </p>
-              <div className="preference-scale-guide" role="list" aria-label="Solar tier levels">
+              <div className="preference-scale-guide preference-radiogroup" role="radiogroup" aria-label="Solar tier levels">
                 {solarTierEntries.map(([k, v], idx) => (
-                  <div key={k} role="listitem" className={`preference-level ${idx === solarIdx ? 'active' : ''}`}>
+                  <button
+                    key={k}
+                    type="button"
+                    role="radio"
+                    aria-checked={idx === solarIdx}
+                    className={`preference-level preference-option ${idx === solarIdx ? 'active' : ''}`}
+                    onClick={() => setSolarTier(k)}
+                  >
                     <span className="preference-level-index">{idx + 1}</span>
                     <span className="preference-level-text">{v.label} — ~£{v.capexPerKw.toLocaleString('en-GB')}/kWp · {v.blurb}</span>
-                  </div>
+                  </button>
                 ))}
               </div>
             </div>
@@ -1214,20 +1192,6 @@ export function App() {
                 Wind cost band
                 <InfoIcon text="Indicative installed cost/performance band for wind." />
               </label>
-              <input
-                type="range"
-                id="wind_tier"
-                className="preference-slider"
-                min={0}
-                max={windTierEntries.length - 1}
-                step={1}
-                value={windIdx}
-                style={{ '--slider-fill': `${windPct}%` }}
-                onChange={(e) => {
-                  const idx = Number(e.target.value)
-                  setWindTier(windTierEntries[idx][0])
-                }}
-              />
               <div className="field-hint" style={{ display: 'flex', justifyContent: 'space-between' }}>
                 <span>No wind</span>
                 <span>Premium</span>
@@ -1235,12 +1199,19 @@ export function App() {
               <p className="field-hint preference-current">
                 {windTierEntries[windIdx][1].label} — ~£{windTierEntries[windIdx][1].capexPerKw.toLocaleString('en-GB')}/kW · {windTierEntries[windIdx][1].blurb}
               </p>
-              <div className="preference-scale-guide" role="list" aria-label="Wind tier levels">
+              <div className="preference-scale-guide preference-radiogroup" role="radiogroup" aria-label="Wind tier levels">
                 {windTierEntries.map(([k, v], idx) => (
-                  <div key={k} role="listitem" className={`preference-level ${idx === windIdx ? 'active' : ''}`}>
+                  <button
+                    key={k}
+                    type="button"
+                    role="radio"
+                    aria-checked={idx === windIdx}
+                    className={`preference-level preference-option ${idx === windIdx ? 'active' : ''}`}
+                    onClick={() => setWindTier(k)}
+                  >
                     <span className="preference-level-index">{idx + 1}</span>
                     <span className="preference-level-text">{v.label} — ~£{v.capexPerKw.toLocaleString('en-GB')}/kW · {v.blurb}</span>
-                  </div>
+                  </button>
                 ))}
               </div>
             </div>
@@ -1252,20 +1223,6 @@ export function App() {
                 Battery cost band
                 <InfoIcon text="Indicative installed cost/performance band for a home battery (£ per usable kWh)." />
               </label>
-              <input
-                type="range"
-                id="battery_tier"
-                className="preference-slider"
-                min={0}
-                max={batteryTierEntries.length - 1}
-                step={1}
-                value={batteryIdx}
-                style={{ '--slider-fill': `${batteryPct}%` }}
-                onChange={(e) => {
-                  const idx = Number(e.target.value)
-                  setBatteryTier(batteryTierEntries[idx][0])
-                }}
-              />
               <div className="field-hint" style={{ display: 'flex', justifyContent: 'space-between' }}>
                 <span>No battery</span>
                 <span>Premium</span>
@@ -1273,12 +1230,19 @@ export function App() {
               <p className="field-hint preference-current">
                 {batteryTierEntries[batteryIdx][1].label} — ~£{batteryTierEntries[batteryIdx][1].capexPerKwh.toLocaleString('en-GB')}/kWh · {batteryTierEntries[batteryIdx][1].blurb}
               </p>
-              <div className="preference-scale-guide" role="list" aria-label="Battery tier levels">
+              <div className="preference-scale-guide preference-radiogroup" role="radiogroup" aria-label="Battery tier levels">
                 {batteryTierEntries.map(([k, v], idx) => (
-                  <div key={k} role="listitem" className={`preference-level ${idx === batteryIdx ? 'active' : ''}`}>
+                  <button
+                    key={k}
+                    type="button"
+                    role="radio"
+                    aria-checked={idx === batteryIdx}
+                    className={`preference-level preference-option ${idx === batteryIdx ? 'active' : ''}`}
+                    onClick={() => setBatteryTier(k)}
+                  >
                     <span className="preference-level-index">{idx + 1}</span>
                     <span className="preference-level-text">{v.label} — ~£{v.capexPerKwh.toLocaleString('en-GB')}/kWh · {v.blurb}</span>
-                  </div>
+                  </button>
                 ))}
               </div>
               {batteryTier !== 'none' && (

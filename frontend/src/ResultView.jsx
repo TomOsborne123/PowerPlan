@@ -1,5 +1,6 @@
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts'
 import { InfoIcon } from './InfoIcon'
+import { INSTALLER_SUGGESTIONS } from './optimiserConstants'
 
 export function ResultView({ result, optimiserControls }) {
   const opt = result.optimization
@@ -400,6 +401,35 @@ export function ResultView({ result, optimiserControls }) {
               ))}
             </ul>
           </details>
+        </div>
+
+        <div className="card dashboard-card">
+          <h2>
+            Suggested installers
+            <InfoIcon text="Links to installer directories. Use these to find local, relevant installers for each technology." />
+          </h2>
+
+          <ul className="installers-list">
+            {INSTALLER_SUGGESTIONS.map((s) => (
+              <li key={s.key} className="installers-item">
+                <div className="installers-item-title">{s.title}</div>
+                <div className="installers-item-note">{s.note}</div>
+                <div className="installers-item-links">
+                  {s.links.map((l) => (
+                    <a
+                      key={l.href}
+                      href={l.href}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="installers-link"
+                    >
+                      {l.label}
+                    </a>
+                  ))}
+                </div>
+              </li>
+            ))}
+          </ul>
         </div>
       </div>
     </div>

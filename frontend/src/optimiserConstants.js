@@ -82,3 +82,50 @@ export function copForHeatPumpTier(tier) {
   const row = HEAT_PUMP_OPTIONS.find((o) => o.value === tier)
   return row ? row.cop : 3.0
 }
+
+/**
+ * Suggested UK installer finder links for each technology.
+ * These are intentionally "directory" style pages rather than endorsement URLs.
+ */
+export const INSTALLER_SUGGESTIONS = [
+  {
+    key: 'solar',
+    title: 'Solar PV',
+    note: 'Use the directory and filter by “Solar PV”.',
+    links: [
+      { label: 'MCS – Find an installer', href: 'https://www.mcscertified.com/find-an-installer/' },
+    ],
+  },
+  {
+    key: 'wind',
+    title: 'Small wind',
+    note: 'Use the directory and filter by “Small Wind Turbines”.',
+    links: [
+      { label: 'MCS – Find an installer', href: 'https://www.mcscertified.com/find-an-installer/' },
+    ],
+  },
+  {
+    key: 'insulation',
+    title: 'Insulation / retrofit',
+    note: 'Search by postcode/town in the directory.',
+    links: [{ label: 'NIA – Find an installer', href: 'https://www.nia-uk.org/find-an-installer/' }],
+  },
+  {
+    key: 'heat_pump',
+    title: 'Heat pumps',
+    note: 'Use the directory and filter by heat-pump type as needed.',
+    links: [
+      { label: 'GOV.UK – Find a heat pump installer', href: 'https://www.gov.uk/guidance/find-a-heat-pump-installer' },
+      { label: 'MCS – Find an installer', href: 'https://www.mcscertified.com/find-an-installer/' },
+    ],
+  },
+  {
+    key: 'battery',
+    title: 'Battery storage',
+    note: 'Use the manufacturer/partner directory for certified installers.',
+    links: [
+      { label: 'Tesla – Certified installers (Powerwall)', href: 'https://www.tesla.com/en_GB/support/certified-installers?productType=powerwall' },
+      { label: 'Renewables Excellence – Battery storage installers', href: 'https://renewablesexcellence.co.uk/battery-storage-installers/' },
+    ],
+  },
+]

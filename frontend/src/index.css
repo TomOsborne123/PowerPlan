@@ -1334,6 +1334,26 @@ input::placeholder {
   background: rgba(63, 185, 80, 0.12);
 }
 
+.preference-option {
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  border-width: 1px;
+  font: inherit;
+  text-align: left;
+}
+
+button.preference-option:hover:not(.active) {
+  border-color: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+button.preference-option:focus-visible {
+  outline: none;
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px rgba(77, 163, 255, 0.18);
+}
+
 .preference-level-index {
   display: inline-flex;
   align-items: center;
@@ -1833,4 +1853,48 @@ input::placeholder {
 .projection-summary-delta-sub {
   font-size: 0.78rem;
   opacity: 0.85;
+}
+
+/* Suggested installers list */
+.installers-list {
+  list-style: none;
+  padding: 0;
+  margin: 0.25rem 0 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.installers-item {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.01);
+  padding: 0.7rem 0.75rem;
+}
+
+.installers-item-title {
+  font-weight: 700;
+  margin-bottom: 0.2rem;
+}
+
+.installers-item-note {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  line-height: 1.35;
+  margin-bottom: 0.4rem;
+}
+
+.installers-item-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.6rem;
+}
+
+.installers-link {
+  color: var(--accent);
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.installers-link:hover {
+  text-decoration: underline;
 }
