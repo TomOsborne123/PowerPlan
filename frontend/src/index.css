@@ -579,6 +579,52 @@ input::placeholder {
   flex-shrink: 0;
 }
 
+.site-nav {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem 0.75rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.site-nav a {
+  color: var(--brand);
+  text-decoration: none;
+  padding: 0.2rem 0.05rem;
+}
+
+.site-nav a:hover {
+  text-decoration: underline;
+}
+
+.site-nav-welcome {
+  justify-content: center;
+  width: 100%;
+  max-width: 880px;
+  margin: 0 auto 0.75rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.site-nav-app {
+  padding-right: 0.25rem;
+  border-right: 1px solid var(--border);
+  margin-right: 0.1rem;
+}
+
+@media (max-width: 720px) {
+  .site-nav-app {
+    border-right: none;
+    padding-right: 0;
+    margin-right: 0;
+    width: 100%;
+    justify-content: flex-end;
+  }
+}
+
 .app-overview-text {
   margin: 0.1rem 0 0.35rem;
   color: #dbe4f2;

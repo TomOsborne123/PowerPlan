@@ -27,6 +27,7 @@ import { CesiumFlyTo } from './CesiumFlyTo'
 import { InfoIcon } from './InfoIcon'
 import { FAVICON_PATH } from './branding'
 import { normalizePostcode, isOutwardOnlyPostcode, isFullPostcode } from './postcodeUtils'
+import { applySeoHead } from './seoHead'
 
 export function App() {
   const [postcode, setPostcode] = useState('')
@@ -227,14 +228,7 @@ export function App() {
       },
     }
     const meta = byStep[uiStep] || byStep[1]
-    document.title = meta.title
-    let desc = document.querySelector('meta[name="description"]')
-    if (!desc) {
-      desc = document.createElement('meta')
-      desc.setAttribute('name', 'description')
-      document.head.appendChild(desc)
-    }
-    desc.setAttribute('content', meta.description)
+    applySeoHead({ title: meta.title, description: meta.description, path: '/' })
   }, [uiStep])
 
   useEffect(() => {
@@ -741,9 +735,22 @@ export function App() {
   if (uiStep === 0) {
     return (
       <div className="wrap welcome-wrap">
+        <nav className="site-nav site-nav-welcome" aria-label="Site sections">
+          <a href="/collections/uk-home-energy/">UK energy hub</a>
+          <a href="/blog/">Blog</a>
+          <a href="/">Planner</a>
+        </nav>
         <div className="welcome">
           <div className="welcome-hero">
-            <img src={FAVICON_PATH} alt="PowerPlan logo" className="welcome-logo" />
+            <img
+              src={FAVICON_PATH}
+              alt="PowerPlan logo"
+              className="welcome-logo"
+              width={96}
+              height={96}
+              decoding="async"
+              fetchPriority="high"
+            />
             <h1 className="welcome-title">PowerPlan</h1>
             <p className="welcome-tagline">Smart energy planning for UK homes</p>
           </div>
@@ -774,7 +781,10 @@ export function App() {
           >
             Get started
           </button>
-          <p className="welcome-footnote">Free to use • Built for UK postcodes • No sign-up required</p>
+          <p className="welcome-footnote">
+            Free to use • Built for UK postcodes • No sign-up required ·{' '}
+            <a href="/collections/uk-home-energy/">Guides &amp; hub</a>
+          </p>
         </div>
       </div>
     )
@@ -784,10 +794,14 @@ export function App() {
     <div className="wrap">
       <div className="top-row">
         <h1>
-          <img src={FAVICON_PATH} alt="" className="title-logo" />
+          <img src={FAVICON_PATH} alt="" className="title-logo" width={26} height={26} decoding="async" />
           PowerPlan
         </h1>
         <div className="top-row-right">
+          <nav className="site-nav site-nav-app" aria-label="Site sections">
+            <a href="/collections/uk-home-energy/">Hub</a>
+            <a href="/blog/">Blog</a>
+          </nav>
           <button
             type="button"
             className="btn btn-sm"

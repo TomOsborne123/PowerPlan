@@ -430,6 +430,10 @@ export function ResultView({ result, optimiserControls }) {
               </li>
             ))}
           </ul>
+          <p className="field-hint" style={{ marginTop: '0.65rem' }}>
+            More context on tariffs and upgrades:{' '}
+            <a href="/collections/uk-home-energy/">UK home energy hub</a> (guides that link back to this planner).
+          </p>
         </div>
       </div>
     </div>
