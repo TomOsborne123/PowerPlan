@@ -733,11 +733,6 @@ export function App() {
   if (uiStep === 0) {
     return (
       <div className="wrap welcome-wrap">
-        <nav className="site-nav site-nav-welcome" aria-label="Site sections">
-          <a href="/collections/uk-home-energy/">UK energy hub</a>
-          <a href="/blog/">Blog</a>
-          <a href="/">Planner</a>
-        </nav>
         <div className="welcome">
           <div className="welcome-hero">
             <img
@@ -779,10 +774,7 @@ export function App() {
           >
             Get started
           </button>
-          <p className="welcome-footnote">
-            Free to use • Built for UK postcodes • No sign-up required ·{' '}
-            <a href="/collections/uk-home-energy/">Guides &amp; hub</a>
-          </p>
+          <p className="welcome-footnote">Free to use • Built for UK postcodes • No sign-up required</p>
         </div>
       </div>
     )
