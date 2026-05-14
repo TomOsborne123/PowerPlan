@@ -19,7 +19,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from flask import Flask, jsonify, request, send_from_directory
+from datetime import datetime, timezone
+
+from flask import Flask, Response, jsonify, request, send_from_directory
 from flask_cors import CORS
 
 from src.db import mysql_config
@@ -31,6 +33,66 @@ from src.models.tariff_recommendation import (
 app = Flask(__name__, static_folder="static", static_url_path="")
 # Resolve static_folder so it works when run from project root
 app.static_folder = os.path.join(os.path.dirname(__file__), "static")
+
+PUBLIC_SITE_ORIGIN = (
+    os.environ.get("PUBLIC_SITE_ORIGIN") or os.environ.get("VITE_SITE_ORIGIN") or "https://www.powerplan.site"
+).rstrip("/")
+
+
+def _xml_esc(text: str) -> str:
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+
+def _sitemap_url_entries() -> list[tuple[str, str, str, str | None]]:
+    """Programmatic sitemap rows: (loc, changefreq, priority, lastmod YYYY-MM-DD or None)."""
+    static_root = Path(app.static_folder)
+    seen: set[str] = set()
+    rows: list[tuple[str, str, str, str | None]] = []
+
+    def add(loc_suffix: str, changefreq: str, priority: str, lastmod: str | None = None) -> None:
+        loc = f"{PUBLIC_SITE_ORIGIN}{loc_suffix}"
+        if loc in seen:
+            return
+        seen.add(loc)
+        rows.append((loc, changefreq, priority, lastmod))
+
+    add("/", "weekly", "1.0")
+    add("/blog/", "weekly", "0.85")
+    for seg in ("/postcode", "/tariffs", "/optimiser", "/results", "/projection"):
+        add(seg, "weekly", "0.7")
+
+    blog_dir = static_root / "blog"
+    if blog_dir.is_dir():
+        for f in sorted(blog_dir.glob("*.html")):
+            if f.name == "index.html":
+                continue
+            lm = datetime.fromtimestamp(f.stat().st_mtime, tz=timezone.utc).strftime("%Y-%m-%d")
+            add(f"/blog/{f.name}", "monthly", "0.8", lm)
+
+    coll = static_root / "collections"
+    if coll.is_dir():
+        for d in sorted(coll.iterdir()):
+            idx = d / "index.html"
+            if d.is_dir() and idx.is_file():
+                lm = datetime.fromtimestamp(idx.stat().st_mtime, tz=timezone.utc).strftime("%Y-%m-%d")
+                add(f"/collections/{d.name}/", "weekly", "0.85", lm)
+
+    return rows
+
+
+def _render_sitemap_xml() -> str:
+    lines = ['<?xml version="1.0" encoding="UTF-8"?>', '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">']
+    for loc, cf, pr, lm in _sitemap_url_entries():
+        lines.append("  <url>")
+        lines.append(f"    <loc>{_xml_esc(loc)}</loc>")
+        lines.append(f"    <changefreq>{cf}</changefreq>")
+        lines.append(f"    <priority>{pr}</priority>")
+        if lm:
+            lines.append(f"    <lastmod>{lm}</lastmod>")
+        lines.append("  </url>")
+    lines.append("</urlset>")
+    return "\n".join(lines) + "\n"
+
 
 # If the browser UI is on another origin than this app, set CORS_ORIGINS (comma-separated origins).
 _cors_origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip()]
@@ -272,6 +334,27 @@ def _run_scrape_job(
 
 @app.route("/")
 def index():
+    return send_from_directory(app.static_folder, "index.html")
+
+
+@app.route("/sitemap.xml")
+def sitemap_xml():
+    """Dynamic sitemap: hub pages, planner URLs, blog HTML, and collection indexes from disk."""
+    return Response(_render_sitemap_xml(), mimetype="application/xml")
+
+
+@app.route("/postcode")
+@app.route("/postcode/")
+@app.route("/tariffs")
+@app.route("/tariffs/")
+@app.route("/optimiser")
+@app.route("/optimiser/")
+@app.route("/results")
+@app.route("/results/")
+@app.route("/projection")
+@app.route("/projection/")
+def spa_planner_shell():
+    """Shareable SPA URLs (same shell as `/`); keeps canonical paths indexable when JS runs."""
     return send_from_directory(app.static_folder, "index.html")
 
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { SITE_ORIGIN } from './seoHead'
+import { SITE_ORIGIN } from './siteOrigin'
 
 describe('seoHead', () => {
   it('SITE_ORIGIN has no trailing slash', () => {

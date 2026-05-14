@@ -28,6 +28,8 @@ import { InfoIcon } from './InfoIcon'
 import { FAVICON_PATH } from './branding'
 import { normalizePostcode, isOutwardOnlyPostcode, isFullPostcode } from './postcodeUtils'
 import { applySeoHead } from './seoHead'
+import { pathToUiStep, uiStepToPath, normalizePublicPath, UI_STEP_PATHS } from './seoRoutes'
+import { getPlannerPageMeta } from './pageMeta'
 
 export function App() {
   const [postcode, setPostcode] = useState('')
@@ -38,7 +40,9 @@ export function App() {
   // Controls the single-screen "step" experience:
   // 0) Welcome/title page, 1) Postcode input, 2) Scraping globe,
   // 3) Optimiser inputs, 4) Graph + tariffs, 5) Cost projection
-  const [uiStep, setUiStep] = useState(0)
+  const [uiStep, setUiStep] = useState(() =>
+    typeof window !== 'undefined' ? pathToUiStep(window.location.pathname) : 0
+  )
   const [annualConsumptionKwh, setAnnualConsumptionKwh] = useState('')
   const [scrapeLoaded, setScrapeLoaded] = useState(false)
   const [scrapeTariffCount, setScrapeTariffCount] = useState(null)
@@ -200,35 +204,29 @@ export function App() {
   }, [uiStep])
 
   useEffect(() => {
-    const base = 'PowerPlan'
-    const byStep = {
-      0: {
-        title: 'PowerPlan - UK Home Energy Planning',
-        description: 'Compare UK electricity tariffs and model solar, wind, insulation and heat-pump upgrades with PowerPlan.',
-      },
-      1: {
-        title: 'PowerPlan - Home Energy Planning in the UK',
-        description: 'Enter your UK postcode and usage to start comparing energy tariffs and optimisation options.',
-      },
-      2: {
-        title: `${base} — Loading local tariffs`,
-        description: 'PowerPlan is locating your area and preparing tariff data for your postcode.',
-      },
-      3: {
-        title: `${base} — Optimiser setup`,
-        description: 'Answer setup questions for heating, insulation, technology cost bands, and comparison horizon.',
-      },
-      4: {
-        title: `${base} — Recommendation results`,
-        description: 'View recommended tariff ranking, annual bill estimates, and generation versus demand results.',
-      },
-      5: {
-        title: `${base} — Cost projection`,
-        description: 'Explore cumulative long-run costs by scenario with solar, wind, and insulation upgrades.',
-      },
+    if (typeof window === 'undefined') return
+    const cur = normalizePublicPath(window.location.pathname)
+    const target = uiStepToPath(uiStep)
+    if (cur === target) return
+    const curKnown = UI_STEP_PATHS.includes(cur)
+    if (!curKnown) {
+      window.history.replaceState({ uiStep }, '', target === '/' ? '/' : target)
+      return
     }
-    const meta = byStep[uiStep] || byStep[1]
-    applySeoHead({ title: meta.title, description: meta.description, path: '/' })
+    window.history.pushState({ uiStep }, '', target === '/' ? '/' : target)
+  }, [uiStep])
+
+  useEffect(() => {
+    const onPop = () => {
+      setUiStep(pathToUiStep(window.location.pathname))
+    }
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [])
+
+  useEffect(() => {
+    const meta = getPlannerPageMeta(uiStep)
+    applySeoHead(meta)
   }, [uiStep])
 
   useEffect(() => {

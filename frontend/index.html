@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en-GB">
   <head>
     <!-- Google tag (gtag.js) -->
     <script async src="https://www.googletagmanager.com/gtag/js?id=G-P84ZW722X5"></script>
@@ -10,13 +10,29 @@
 
       gtag('config', 'G-P84ZW722X5');
     </script>
+    <!-- Default head: STATIC_PAGE_META.plannerShell in src/pageMeta.js; planner steps override via applySeoHead -->
     <meta charset="UTF-8" />
     <link rel="icon" type="image/png" sizes="512x512" href="/favicon.png?v=7" />
     <link rel="icon" type="image/png" sizes="48x48" href="/favicon.png?v=7" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=7" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#0a0e14" />
+    <meta name="robots" content="index, follow" />
+    <meta
+      name="keywords"
+      content="PowerPlan, UK home energy, electricity tariff comparison, solar battery UK, heat pump planner"
+    />
     <link rel="canonical" href="https://www.powerplan.site/" />
+    <script>
+      (function () {
+        var ok = { '/': 1, '/postcode': 1, '/tariffs': 1, '/optimiser': 1, '/results': 1, '/projection': 1 }
+        var p = location.pathname.replace(/\/$/, '') || '/'
+        if (!ok[p]) return
+        var href = location.origin + (p === '/' ? '/' : p)
+        var link = document.querySelector('link[rel="canonical"]')
+        if (link) link.setAttribute('href', href)
+      })()
+    </script>
     <title>PowerPlan - Home Energy Planning in the UK</title>
     <meta
       name="description"
@@ -42,7 +58,7 @@
       content="Compare UK electricity tariffs and model home energy upgrades — free, no sign-up."
     />
     <meta name="twitter:image" content="https://www.powerplan.site/favicon.png?v=7" />
-    <script type="application/ld+json">
+    <script type="application/ld+json" id="powerplan-ld-json">
       {
         "@context": "https://schema.org",
         "@graph": [
