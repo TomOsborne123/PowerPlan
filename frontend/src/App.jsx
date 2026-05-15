@@ -790,7 +790,13 @@ export function App() {
         <div className="top-row-right">
           <nav className="site-nav site-nav-app" aria-label="Site sections">
             <a href="/collections/uk-home-energy/">Hub</a>
-            <a href="/blog/">Blog</a>
+            <a
+              href="https://tomosbornee123.substack.com/p/how-to-save-money-on-energy-bills"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Blog
+            </a>
           </nav>
           <button
             type="button"
